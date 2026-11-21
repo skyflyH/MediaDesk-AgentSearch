@@ -1,0 +1,65 @@
+node_modules/
+out/
+dist/
+artifacts/
+*.log
+.DS_Store
+.vs/
+**/bin/
+**/obj/
+# Local planning documents and development records (keep files on disk).
+/docs/
+/智能媒体素材管理系统_*.md
+
+# One-off desktop diagnostics and environment-specific offline assembly.
+# Keep reproducible build/package scripts, smoke tests and model export tools.
+/scripts/verify-*.cjs
+/scripts/assemble-offline-service.cjs
+
+# Legacy Electron distribution workflows are local-only.
+/scripts/package-comparison.cjs
+/scripts/package-lean.cjs
+/scripts/desktop-smoke.cjs
+/scripts/ResourceStamp/
+
+# Local agent/editor configuration and temporary working directories.
+/.agents/
+/.codex/
+/.idea/
+/.test-tmp/
+/.venv/
+**/__pycache__/
+*.pyc
+
+# Machine-specific configuration and credentials; examples may be committed.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# User libraries, search indexes, model credentials and browser state.
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+**/model-settings.json
+**/preview-cache-path.txt
+**/webview-port.txt
+**/diagnostic-command.json
+**/diagnostic-result.json
+**/webview-ipc/
+**/WebView2/
+**/user-data/
+**/profile/
+**/profiles/
+*.onnx
+*.safetensors
+*.pem
+*.key
+*.pfx
+*.p12
+
+coverage/
+.gstack/

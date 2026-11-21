@@ -1,0 +1,36 @@
+{
+  "name": "mediadesk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MediaDesk — local photo and video organization for Windows",
+  "author": "MediaDesk",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "npm run build && node scripts/start-webview.cjs",
+    "build:service": "dotnet build src/MediaLibrary.Service/MediaLibrary.Service.csproj -c Debug -o artifacts/service --nologo",
+    "publish:service:lean": "dotnet publish src/MediaLibrary.Service/MediaLibrary.Service.csproj -c Release -r win-x64 --self-contained false -p:NuGetLockFilePath=../../artifacts/service-framework-dependent.lock.json -o artifacts/service-release-app --nologo",
+    "build:renderer": "vite build --config vite.webview.config.ts",
+    "build:webview": "npm run publish:service:lean && npm run build:renderer && node scripts/build-webview.mjs && dotnet publish apps/webview/MediaLibrary.WebView/MediaLibrary.WebView.csproj -c Release --self-contained false -o artifacts/webview-app --nologo",
+    "build": "npm run build:webview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && vue-tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.webview.json",
+    "test:desktop": "vitest run",
+    "test:service": "dotnet test tests/MediaLibrary.Service.Tests/MediaLibrary.Service.Tests.csproj --nologo",
+    "package:win": "npm run build && node scripts/package-webview.cjs",
+    "package:webview": "npm run package:win"
+  },
+  "devDependencies": {
+    "@langchain/openai": "^1.8.4",
+    "@lucide/vue": "^1.76.0",
+    "@types/node": "^22.20.5",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "electron": "^45.4.1",
+    "electron-vite": "^6.0.0",
+    "langchain": "^1.6.7",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1",
+    "vue": "^3.5.45",
+    "vue-tsc": "^3.3.14",
+    "zod": "^4.6.7"
+  }
+}

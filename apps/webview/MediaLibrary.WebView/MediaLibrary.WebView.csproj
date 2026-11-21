@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <AssemblyName>MediaDesk</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>MediaDesk</Product><Title>MediaDesk</Title>
+    <Version>0.1.0</Version><FileVersion>0.1.0.0</FileVersion><AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <ApplicationIcon>../../../resources/branding/mediadesk.ico</ApplicationIcon>
+    <WebViewSdkDirectory Condition="'$(WebViewSdkDirectory)' == ''">$(MSBuildThisFileDirectory)..\..\..\artifacts\webview-sdk</WebViewSdkDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../../resources/branding/mediadesk.ico" LogicalName="MediaDesk.Icon" />
+    <Reference Include="Microsoft.Web.WebView2.Core"><HintPath>$(WebViewSdkDirectory)\Microsoft.Web.WebView2.Core.dll</HintPath></Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms"><HintPath>$(WebViewSdkDirectory)\Microsoft.Web.WebView2.WinForms.dll</HintPath></Reference>
+    <None Include="$(WebViewSdkDirectory)\WebView2Loader.dll" Link="WebView2Loader.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

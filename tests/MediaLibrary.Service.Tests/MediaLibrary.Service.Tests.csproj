@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
+    <ProjectReference Include="../../src/MediaLibrary.Service/MediaLibrary.Service.csproj" />
+    <Compile Include="../../apps/webview/MediaLibrary.WebView/NodeRuntime.cs" Link="WebView/NodeRuntime.cs" />
+    <Compile Include="../../apps/webview/MediaLibrary.WebView/ExplorerLauncher.cs" Link="WebView/ExplorerLauncher.cs" />
+    <None Include="../../apps/desktop/src/renderer/assets/*.jpg" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Fixtures/synthetic.dng" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,56 @@
+.app-titlebar {
+  --caption-start: env(titlebar-area-x, 0px);
+  --caption-width: env(titlebar-area-width, 100%);
+  --titlebar-leading: 0px;
+  --nav-width: min(32rem, calc(var(--caption-width) - var(--titlebar-leading) - .5rem));
+  --nav-left: clamp(
+    calc(var(--caption-start) + var(--titlebar-leading) + .25rem),
+    calc((100% - var(--nav-width)) / 2),
+    calc(var(--caption-start) + var(--caption-width) - var(--nav-width) - .25rem)
+  );
+  display: flex;
+  align-items: center;
+  min-height: max(2.75rem, env(titlebar-area-height, 0px));
+  app-region: drag;
+}
+
+.app-titlebar-nav {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(max-content, 1fr);
+  justify-items: center;
+  width: var(--nav-width);
+  margin-left: var(--nav-left);
+  overflow-x: auto;
+  scrollbar-width: none;
+  app-region: no-drag;
+}
+
+.app-titlebar .app-titlebar-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+  min-width: 1.875rem;
+  min-height: 2rem;
+  padding: .15rem .5rem;
+  border: 0;
+  border-radius: .25rem;
+  background: transparent;
+  color: inherit;
+  font-size: .875rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.app-titlebar .app-titlebar-nav button:focus-visible { outline-offset: -2px; }
+.app-titlebar .app-titlebar-nav svg { flex: none; width: 1rem; height: 1rem; }
+
+@media (max-width: 820px) {
+  .app-titlebar {
+    --nav-width: min(12rem, calc(var(--caption-width) - var(--titlebar-leading) - .5rem));
+  }
+  .app-titlebar .app-titlebar-nav button { padding-inline: .35rem; }
+  .app-titlebar .app-titlebar-nav button span { display: none; }
+}
