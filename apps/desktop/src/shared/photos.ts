@@ -16,6 +16,6 @@ export type PhotoSceneFilter = z.infer<typeof photoSceneFilter>
 
 export function hasPhotoConstraints(filter: PhotoSceneFilter): boolean {
   return Boolean(filter.remarkTerms?.length || filter.nameTerms?.length || filter.author || filter.directoryId ||
-    filter.directoryPaths?.length || filter.keywordTerms?.length || filter.format || filter.dateFrom || filter.dateToExclusive ||
+    filter.directoryPaths?.length || filter.keywordTerms?.length || filter.keywordGroups?.length || filter.format || filter.dateFrom || filter.dateToExclusive ||
     filter.captureMinuteFrom !== undefined || filter.captureMinuteToExclusive !== undefined)
 }

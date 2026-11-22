@@ -34,6 +34,8 @@ export const searchFilterSchema = z.strictObject({
   nameTerms: z.array(term).max(12).optional(),
   remarkTerms: z.array(term).max(12).optional(),
   keywordTerms: z.array(term).max(12).optional(),
+  keywordGroups: z.array(z.array(term).min(1).max(6)).max(6).optional(),
+  includeDirectoryNames: z.boolean().optional(),
   author: z.string().trim().min(1).max(120).optional(),
   limit: z.number().int().min(1).max(100).optional(),
   cursor: cursor.optional()

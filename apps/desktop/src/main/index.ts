@@ -376,7 +376,9 @@ function registerIpc(): void {
     local().request('archive.status', { operationId }, archiveStatusSchema))
   handle(channels.retryPropertiesChannel, z.tuple([assetId]), (operationId) =>
     local().request('archive.retryProperties', { operationId }, archiveStatusSchema))
-  handleFrom(channels.searchIndexDirectoriesChannel, z.tuple([searchDirectoryPaths, z.uuid().optional()]), async (event, paths, requestId?: string) => {
+  handleFrom(channels.searchIndexDirectoriesChannel, z.tuple([searchDirectoryPaths.min(0), z.uuid().optional()]), async (event, paths, requestId?: string) => {
+    const registered = await local().request('search.setRoots', { directoryPaths: paths }, z.null())
+    if ('error' in registered || !paths.length) return registered
     const reply = await local().request('search.indexDirectories', { directoryPaths: paths, includeSubdirectories: true }, searchPageSchema, 10_000, progress => {
       if (requestId && !event.sender.isDestroyed()) event.sender.send(channels.searchIndexProgressChannel, requestId, progress)
     })
@@ -532,11 +534,11 @@ function createTray(): Tray {
   const item = new Tray(nativeImage.createFromPath(trayIcon))
   item.setToolTip('MediaDesk')
   item.setContextMenu(Menu.buildFromTemplate([
-    { label: '打开', click: showWindow },
+    { label: '打开', click: showMainPage },
     { label: '快捷搜索', click: showQuickSearch },
     { label: '退出', click: () => app.quit() }
   ]))
-  item.on('double-click', showWindow)
+  item.on('click', showMainPage)
   return item
 }
 

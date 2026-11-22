@@ -84,7 +84,9 @@ class WebContents extends EventEmitter {
   reloadIgnoringCache() { void native('reload', [this.id, true]) }
   toggleDevTools() { void native('devtools', [this.id]) }
   getURL() { return this.mainFrame.url }
-  cut() { this.command('cut') } copy() { this.command('copy') } paste() { this.command('paste') }
+  cut() { this.command('cut') }
+  copy() { void native('copyText', [this.id]) }
+  paste() { void native('pastePlain', [this.id]) }
   pasteAndMatchStyle() { void native('pastePlain', [this.id]) }
   selectAll() { this.command('selectAll') } undo() { this.command('undo') } redo() { this.command('redo') }
   private command(command: string) { void this.executeJavaScript(`document.execCommand(${JSON.stringify(command)})`) }

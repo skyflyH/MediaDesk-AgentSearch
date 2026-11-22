@@ -36,6 +36,7 @@ public sealed class SearchTests
 
         Assert.Equal("written", properties.WriteExplorerRemark(path, "杭州西湖夜景"));
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(2));
+        database.RefreshSearchFile(path, force: true);
         Assert.Empty(database.Filter(filter, China).Items);
         Assert.Equal("杭州西湖夜景", Assert.Single(database.Filter(filter with { KeywordTerms = ["西湖"] }, China).Items).RemarkSummary);
         Assert.Empty(database.LoadWorkspace().Items);
@@ -284,6 +285,9 @@ public sealed class SearchTests
         using (var command = connection.CreateCommand())
         {
             command.CommandText = """
+                DROP TABLE search_roots;
+                DROP TABLE search_files;
+                DROP TABLE search_folders;
                 ALTER TABLE asset_locations DROP COLUMN pending_source_path;
                 DROP TABLE workspace_removed_folders;
                 ALTER TABLE assets DROP COLUMN queued;
@@ -302,7 +306,7 @@ public sealed class SearchTests
             command.ExecuteNonQuery();
         }
         using var reopened = new LibraryDatabase(samples.DatabasePath);
-        Assert.Equal(10, reopened.Health().SchemaVersion);
+        Assert.Equal(11, reopened.Health().SchemaVersion);
         var found = Assert.Single(reopened.Filter(new SearchFilter(NameTerms: ["新名称"], RemarkTerms: ["青岛海边"], Author: "林安"), China).Items);
         Assert.Equal(archived.AssetId, found.AssetId);
         Assert.Equal(archived.FinalPath, reopened.RevealPath(found.AssetId));

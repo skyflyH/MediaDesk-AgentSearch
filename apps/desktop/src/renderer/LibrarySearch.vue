@@ -55,11 +55,10 @@ const stopIndexProgress = api.onSearchIndexProgress?.((requestId, progress) => {
 })
 const indexPercent = computed(() => indexProgress.value.total && indexProgress.value.total > 0
   ? Math.min(100, Math.floor(indexProgress.value.processed / indexProgress.value.total * 100)) : undefined)
-const indexLabel = computed(() => indexProgress.value.phase === 'queued' ? '等待加载目录索引…'
-  : indexProgress.value.phase === 'scanning' ? `正在扫描目录，已发现 ${indexProgress.value.discovered} 个素材…`
-  : `正在加载目录索引 ${indexProgress.value.processed} / ${indexProgress.value.total ?? 0}${indexPercent.value === undefined ? '' : `（${indexPercent.value}%）`}`)
+const indexLabel = computed(() => indexProgress.value.phase === 'queued' ? '正在连接已有索引，可直接搜索…'
+  : indexProgress.value.phase === 'scanning' ? '正在后台检查目录…'
+  : '正在后台同步索引，已处理 ' + indexProgress.value.processed + ' 个素材')
 let indexVersion = 0
-let indexWork: Promise<void> = Promise.resolve()
 
 async function indexDirectories(paths: string[]) {
   const version = ++indexVersion
@@ -67,11 +66,11 @@ async function indexDirectories(paths: string[]) {
   indexing.value = paths.length > 0
   indexRequestId = paths.length ? crypto.randomUUID() : ''
   indexProgress.value = { phase: 'queued', processed: 0, discovered: 0 }
-  if (!paths.length) return
   try {
     const reply = await api.indexSearchDirectories([...paths], indexRequestId)
     if (version !== indexVersion) return
     if ('error' in reply) throw Error(reply.error.message)
+    if (paths.length && didSearch.value && !searching.value && !intelligentMode.value) submit()
   } catch (error) {
     if (version === indexVersion) indexError.value = error instanceof Error ? error.message : '目录索引加载失败，请重试。'
   } finally {
@@ -79,7 +78,7 @@ async function indexDirectories(paths: string[]) {
   }
 }
 
-function retryIndex() { indexWork = indexDirectories(directories.value) }
+function retryIndex() { void indexDirectories(directories.value) }
 const locationError = ref('')
 const mediaKind = ref<'' | SearchItem['mediaKind']>('')
 const query = ref('')
@@ -112,7 +111,13 @@ const canSearch = computed(() => directories.value.length > 0 && !searching.valu
 const didSearch = ref(false)
 const searchError = ref('')
 const unverifiedResults = ref(false)
+const agentWarning = ref('')
 const showCompactEmpty = computed(() => didSearch.value && !showCompactResults.value && !searchError.value)
+const emptySearchMessage = computed(() => indexing.value
+  ? '索引尚未加载完成，暂未找到匹配内容。请等待索引加载完成后再搜索。'
+  : indexError.value
+    ? '索引同步未完成，搜索结果可能不完整。请重试索引同步后再搜索。'
+    : '没有符合条件的文件或目录。')
 let queryVersion = 0
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 let controlsObserver: ResizeObserver | undefined
@@ -184,6 +189,7 @@ function clearResults() {
   folderContents.value = new Map()
   next.value = null
   unverifiedResults.value = false
+  agentWarning.value = ''
   locationError.value = ''
 }
 
@@ -198,7 +204,6 @@ async function runSearch(filter: SearchFilter, intelligent = false) {
   searching.value = true
   searchError.value = ''
   try {
-    await indexWork
     if (version !== queryVersion) return
     if (intelligent) {
       agentRequestId = crypto.randomUUID()
@@ -208,6 +213,7 @@ async function runSearch(filter: SearchFilter, intelligent = false) {
       results.value = reply.result.items
       agentReasons.value = Object.fromEntries((reply.result.reasons ?? []).map((item) => [item.assetId, item.reason]))
       unverifiedResults.value = Boolean(reply.result.warning)
+      agentWarning.value = reply.result.warning ?? ''
     } else {
       const reply = await api.filterAssets(filter)
       if (version !== queryVersion) return
@@ -324,7 +330,7 @@ watch(intelligentMode, cancelScheduledSearch)
 watch(directories, (paths, previous) => {
   if (previous && previous.length === paths.length && previous.every((path, index) => path === paths[index])) return
   resetSearch()
-  indexWork = indexDirectories(paths)
+  void indexDirectories(paths)
 }, { immediate: true })
 function syncDirectories(event: StorageEvent) {
   if (event.key === directoryKey || event.key === null) {
@@ -372,6 +378,7 @@ onUnmounted(() => {
   <div class="library-search" :class="{ 'library-search-compact': compact }">
     <OperationFeedback :message="directoryError" warning />
     <OperationFeedback :message="searchError" warning />
+    <OperationFeedback :message="agentWarning" warning />
     <OperationFeedback :message="locationError" warning />
     <div class="library-workarea">
       <div ref="compactControls" class="library-search-controls">
@@ -426,7 +433,7 @@ onUnmounted(() => {
           </div>
         </section>
         
-        <p v-if="compact && showCompactEmpty" class="library-quick-status" role="status">无匹配结果</p>
+        <p v-if="compact && showCompactEmpty" class="library-quick-status" role="status">{{ emptySearchMessage }}</p>
       </div>
 
       <section v-if="!compact || showCompactResults" class="library-results"
@@ -480,7 +487,7 @@ onUnmounted(() => {
           </li>
         </ul>
         <p v-else-if="!results.length && !searching && !searchError && didSearch"
-          class="workspace-muted" data-library-empty>没有符合条件的文件或目录。</p>
+          class="workspace-muted" role="status" data-library-empty>{{ emptySearchMessage }}</p>
         </div>
       </section>
     </div>

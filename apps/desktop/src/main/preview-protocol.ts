@@ -4,6 +4,7 @@ import { Readable, type Readable as NodeReadable } from 'node:stream'
 import { protocol } from 'electron'
 import type { Result } from '../shared/health'
 import { previewFile, type PreviewKind } from '../shared/preview'
+import type { z } from 'zod'
 import type { ServiceClient } from './service-client'
 import { parseRange } from './byte-range'
 
@@ -12,6 +13,7 @@ type Lease = {
   assetId: string
   owner?: number
   kind: PreviewKind
+  file: z.infer<typeof previewFile>
   responses: Set<Promise<Response>>
   streams: Set<NodeReadable>
   revoked: boolean
@@ -26,7 +28,9 @@ export function registerPreviewScheme() {
 
 export class PreviewProtocol {
   private readonly leases = new Map<string, Lease>()
-  private readonly opening = new Map<string, { revoked: boolean }>()
+  private readonly opening = new Map<string, { revoked: boolean; cancel?: () => void }>()
+  private readonly waiting: Array<{ thumbnail: boolean; run: () => void }> = []
+  private resolving = false
 
   constructor(private readonly local: () => ServiceClient) {}
 
@@ -51,12 +55,12 @@ export class PreviewProtocol {
 
   private async respond(lease: Lease, request: Request): Promise<Response> {
     try {
-      const resolved = await this.resolve(lease.assetId, lease.kind)
-      if ('error' in resolved || lease.revoked) return new Response(null, { status: 404 })
-      const file = await open(resolved.result.path, 'r')
+      if (lease.revoked) return new Response(null, { status: 404 })
+      const resolved = lease.file
+      const file = await open(resolved.path, 'r')
       try {
         const stats = await file.stat({ bigint: true })
-        const { size, volume, fileId, createdNs, writtenNs, mime } = resolved.result
+        const { size, volume, fileId, createdNs, writtenNs, mime } = resolved
         if (!stats.isFile() || lease.revoked || stats.size !== BigInt(size) ||
             stats.dev !== BigInt('0x' + volume) || stats.ino !== BigInt('0x' + fileId) ||
             stats.birthtimeNs !== BigInt(createdNs) || stats.mtimeNs !== BigInt(writtenNs)) throw Error('Preview changed')
@@ -96,14 +100,14 @@ export class PreviewProtocol {
     await this.release(assetId, thumbnail, owner)
     const previous = this.opening.get(key)
     if (previous) previous.revoked = true
-    const opening = { revoked: false }
+    const opening: { revoked: boolean; cancel?: () => void } = { revoked: false }
     this.opening.set(key, opening)
     try {
-      const result = await this.resolve(assetId, kind)
+      const result = await this.schedule(assetId, kind, opening)
       if ('error' in result) return result
       if (opening.revoked) return { error: { code: 'PREVIEW_CANCELLED', message: '预览已关闭。', retryable: true } }
       const token = randomUUID()
-      this.leases.set(token, { assetId, kind, owner, responses: new Set(), streams: new Set(), revoked: false })
+      this.leases.set(token, { assetId, kind, owner, file: result.result, responses: new Set(), streams: new Set(), revoked: false })
       return { result: `${scheme}://asset/${token}` }
     } finally {
       if (this.opening.get(key) === opening) this.opening.delete(key)
@@ -112,7 +116,7 @@ export class PreviewProtocol {
 
   async release(assetId: string, thumbnail = false, owner?: number): Promise<void> {
     const opening = this.opening.get(this.leaseKey(assetId, thumbnail, owner))
-    if (opening) opening.revoked = true
+    if (opening) { opening.revoked = true; opening.cancel?.() }
     await Promise.all([...this.leases].filter(([, lease]) =>
       lease.assetId === assetId && lease.owner === owner && (lease.kind === 'thumbnail') === thumbnail)
       .map(([token, lease]) => lease.closing ??= this.closeLease(token, lease)))
@@ -134,5 +138,36 @@ export class PreviewProtocol {
 
   private resolve(assetId: string, kind: PreviewKind) {
     return this.local().request('preview.resolve', { assetId, kind }, previewFile)
+  }
+
+  private schedule(assetId: string, kind: PreviewKind, opening: { revoked: boolean; cancel?: () => void }): Promise<Result<z.infer<typeof previewFile>>> {
+    return new Promise((resolve, reject) => {
+      const cancelled: Result<z.infer<typeof previewFile>> = { error: {
+        code: 'PREVIEW_CANCELLED', message: '预览已关闭。', retryable: true
+      } }
+      const job = { thumbnail: kind === 'thumbnail', run: () => {
+        opening.cancel = undefined
+        if (opening.revoked) { resolve(cancelled); this.pump(); return }
+        this.resolving = true
+        void this.resolve(assetId, kind).then(resolve, reject).finally(() => {
+          this.resolving = false
+          this.pump()
+        })
+      } }
+      opening.cancel = () => {
+        const index = this.waiting.indexOf(job)
+        if (index >= 0) this.waiting.splice(index, 1)
+        resolve(cancelled)
+      }
+      this.waiting.push(job)
+      this.pump()
+    })
+  }
+
+  private pump() {
+    if (this.resolving) return
+    const foreground = this.waiting.findIndex(job => !job.thumbnail)
+    const job = this.waiting.splice(foreground < 0 ? 0 : foreground, 1)[0]
+    job?.run()
   }
 }

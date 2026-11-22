@@ -75,10 +75,12 @@ public sealed class RawSidecarTests
         var zone = TimeZoneInfo.Utc;
         Assert.Equal("青岛海边", Assert.Single(db.Filter(filter, zone).Items).RemarkSummary);
         RawSidecar.Write(raw, "上海外滩夜景");
+        db.RefreshSearchFile(raw, force: true);
         Assert.Empty(db.Filter(filter, zone).Items);
         Assert.Single(db.Filter(filter with { KeywordTerms = ["外滩"] }, zone).Items);
         Assert.Equal(stamp, File.GetLastWriteTimeUtc(raw));
         File.Delete(RawSidecar.PathFor(raw));
+        db.RefreshSearchFile(raw, force: true);
         Assert.Empty(db.Filter(filter with { KeywordTerms = ["外滩"] }, zone).Items);
     }
 

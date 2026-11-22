@@ -141,6 +141,14 @@ public sealed partial class LibraryDatabase : IDisposable
             AND json_extract(data, '$.tempIdentity') IS NULL
             AND json_extract(data, '$.published') IS NULL
             AND json_extract(data, '$.actual') IS NULL;
+        """,
+        """
+        CREATE TABLE search_roots(path TEXT PRIMARY KEY COLLATE NOCASE, recursive INTEGER NOT NULL, ready INTEGER NOT NULL DEFAULT 0, journal_id TEXT, next_usn INTEGER);
+        CREATE TABLE search_files(path TEXT PRIMARY KEY COLLATE NOCASE, asset_id TEXT NOT NULL, identity TEXT NOT NULL, length INTEGER NOT NULL, modified INTEGER NOT NULL, created INTEGER NOT NULL, attributes INTEGER NOT NULL, xmp_length INTEGER NOT NULL, xmp_modified INTEGER NOT NULL, numbers TEXT NOT NULL, present INTEGER NOT NULL DEFAULT 1);
+        CREATE INDEX search_files_identity ON search_files(identity);
+        CREATE INDEX search_files_asset ON search_files(asset_id);
+        CREATE TABLE search_folders(path TEXT PRIMARY KEY COLLATE NOCASE, created TEXT NOT NULL, identity TEXT NOT NULL);
+        CREATE INDEX search_folders_identity ON search_folders(identity);
         """
     ];
 
@@ -184,6 +192,9 @@ public sealed partial class LibraryDatabase : IDisposable
 
     private void Migrate()
     {
+        // Opening a search reader must not compete with the background writer.
+        if (Convert.ToInt32(Scalar("PRAGMA user_version")) == Migrations.Length &&
+            Convert.ToInt64(Scalar("SELECT fts_dirty FROM search_index_state WHERE id=1")) == 0) return;
         // Read the version under the same write lock as the migration.
         using var transaction = connection.BeginTransaction(deferred: false);
         var version = Convert.ToInt32(Scalar("PRAGMA user_version", transaction));

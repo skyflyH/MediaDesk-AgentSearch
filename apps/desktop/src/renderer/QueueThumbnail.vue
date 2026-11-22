@@ -50,10 +50,11 @@ function thumbnailFailed(event: Event) {
 onMounted(() => {
   if (!host.value) return
   observer = new IntersectionObserver(([entry]) => {
-    if (!entry?.isIntersecting) return
-    visible = true
-    observer?.disconnect()
-    void load()
+    const nextVisible = Boolean(entry?.isIntersecting)
+    if (visible === nextVisible) return
+    visible = nextVisible
+    if (visible) void load()
+    else release()
   }, { root: host.value.closest('.workspace-queue-scroll'), rootMargin: '120px' })
   observer.observe(host.value)
 })

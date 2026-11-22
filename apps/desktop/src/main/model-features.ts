@@ -5,7 +5,7 @@ import type { Result } from '../shared/health'
 import { modelStatus, type ModelConfig, type SuggestionKind, type SuggestionState } from '../shared/model'
 import { searchDetailsSchema, searchFilterSchema, searchPageSchema, type AgentSearchResult, type SearchFilter, type SearchItem } from '../shared/search'
 import { assetSchema, draftSchema, type AssetDraft } from '../shared/workspace'
-import { ModelOutputError, modelOutput, type ModelTransport, type ReadTools, toolFilter } from './model-agent'
+import { ModelOutputError, modelOutput, normalizeSearchAnswer, type ModelTransport, type ReadTools, toolFilter } from './model-agent'
 import type { ServiceClient } from './service-client'
 import { hasPhotoConstraints, photoSceneResult } from '../shared/photos'
 
@@ -162,6 +162,8 @@ export class ModelFeatures {
     report('搜索目录已准备，Agent 正在解析要求并选择检索条件。')
     const start = Date.now()
     const sources = new Map<string, SearchItem>()
+    const combinedIds = new Set<string>()
+    let combinedSearched = false
     let calls = 0
     let searched = false
     let sceneMessage = ''
@@ -169,17 +171,22 @@ export class ModelFeatures {
     const scopes = model.scopes
     const tools: ReadTools = {
       search: async (input) => {
-        if (!active || ++calls > 4) return { error: '本次工具次数已用完。' }
+        if (!active || ++calls > 6) return { error: '本次工具次数已用完。' }
         const parsed = toolFilter.safeParse(input)
         if (!parsed.success) return { error: '筛选条件无效。' }
-        const { photoSceneQuery, ...fields } = parsed.data
+        const { photoSceneQuery, searchStage = 'combined', ...fields } = parsed.data
         if (queryContainsPathCriteria(fields)) return { error: '筛选条件无效。' }
         const nameTerms = [...new Set([...(fields.nameTerms ?? []), ...(constraints.nameTerms ?? [])])]
         const remarkTerms = [...new Set([...(fields.remarkTerms ?? []), ...(constraints.remarkTerms ?? [])])]
+        const keywordTerms = [...new Set([...(fields.keywordTerms ?? []), ...(constraints.keywordTerms ?? [])])]
+        const keywordGroups = [...(fields.keywordGroups ?? []), ...(constraints.keywordGroups ?? [])]
         const filter = searchFilterSchema.safeParse({
           ...fields, ...constraints,
           ...(nameTerms.length ? { nameTerms } : {}),
           ...(remarkTerms.length ? { remarkTerms } : {}),
+          ...(keywordTerms.length ? { keywordTerms } : {}),
+          ...(keywordGroups.length ? { keywordGroups } : {}),
+          ...(fields.includeDirectoryNames !== undefined ? { includeDirectoryNames: fields.includeDirectoryNames && model.scopes.directoryNames } : {}),
           ...((fields.propertyRanges?.length || constraints.propertyRanges?.length) ? {
             propertyRanges: [...(fields.propertyRanges ?? []), ...(constraints.propertyRanges ?? [])]
           } : {}),
@@ -191,10 +198,11 @@ export class ModelFeatures {
           scopes.fileNames && fields.nameTerms?.length ? `文件名：${fields.nameTerms.map(redact).join('、')}` : '',
           scopes.remarks && fields.remarkTerms?.length ? `备注：${fields.remarkTerms.map(redact).join('、')}` : '',
           fields.keywordTerms?.length ? `文件名或备注：${fields.keywordTerms.map(redact).join('、')}` : '',
+          fields.keywordGroups?.length ? `相关词：${fields.keywordGroups.map(group => group.map(redact).join(' / ')).join('；')}` : '',
           filter.data.captureMinuteFrom !== undefined || filter.data.captureMinuteToExclusive !== undefined ? '按拍摄时段筛选' : '',
           filter.data.propertyRanges?.length ? '按文件及拍摄属性筛选' : '',
           fields.dateFrom ? `起始日期：${fields.dateFrom}` : '', fields.dateToExclusive ? `截止日期：${fields.dateToExclusive}` : ''].filter(Boolean)
-        report(`第 ${calls} 次检索：${labels.join('；') || '按当前筛选条件查找候选素材'}。`)
+        report(`第 ${calls} 次${searchStage === 'explore' ? '线索探索' : '组合检索'}：${labels.join('；') || '按当前筛选条件查找候选素材'}。`)
         const wantsScene = !!photoSceneQuery && filter.data.mediaKind !== 'video'
         let sceneStatus: string | undefined
         let items: SearchItem[] | undefined
@@ -226,6 +234,10 @@ export class ModelFeatures {
           nextCursor = reply.result.nextCursor
         }
         searched = true
+        if (searchStage === 'combined') {
+          combinedSearched = true
+          for (const item of items) combinedIds.add(item.assetId)
+        }
         report(`本次查询找到 ${items.length} 项候选素材${nextCursor ? '，还有更多候选' : ''}，正在核对匹配条件。`)
         for (const item of items) {
           const prior = sources.get(item.assetId)
@@ -236,10 +248,11 @@ export class ModelFeatures {
               matches: [...new Map(matches.map((match) => [JSON.stringify(match), match])).values()] })
           }
         }
-        return { items: items.map((item) => safeSearchItem(item, scopes)), nextCursor, photoSceneStatus: sceneStatus }
+        return { items: items.map((item) => safeSearchItem(item, scopes)), nextCursor, photoSceneStatus: sceneStatus,
+          searchStage, guidance: searchStage === 'explore' ? '仅为探索线索，请结合真实名称备注理解其他概念，再组合检索。' : '请核对所有条件，部分匹配必须标明未满足条件。' }
       },
       details: async (id) => {
-        if (!active || ++calls > 4) return { error: '本次工具次数已用完。' }
+        if (!active || ++calls > 6) return { error: '本次工具次数已用完。' }
         if (!sources.has(id)) return { error: '只有本轮已命中的素材可以查看详情。' }
         report('正在读取候选素材详情，核对文件属性和备注。')
         const reply = await this.local().request('search.getDetails', { assetId: id }, searchDetailsSchema)
@@ -254,16 +267,26 @@ export class ModelFeatures {
     let unresolvedConditions: string[] = []
     let summary = ''
     let modelReasons = new Map<string, string>()
+    let partialMatches = new Map<string, string[]>()
+    let provenanceFailure = false
     try {
       const input = JSON.stringify({ query: redact(query), latestCreationDate,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
-      const output = modelOutput.search.parse(await this.timed((signal) => model.transport.search(input, tools, signal)))
+      const output = normalizeSearchAnswer(await this.timed((signal) => model.transport.search(input, tools, signal)))
       resultIds = [...new Set(output.resultIds.filter((id) => sources.has(id)))]
+      partialMatches = new Map((output.partialMatches ?? []).filter(item => resultIds.includes(item.assetId))
+        .map(item => [item.assetId, item.missingConditions.map(redact)]))
+      // Exploration results cannot silently become full matches, even if the model forgets the label.
+      for (const id of resultIds) if (!combinedSearched || !combinedIds.has(id))
+        if (!partialMatches.has(id)) partialMatches.set(id, ['仅命中探索线索，尚未通过全部组合条件核对'])
       summary = redact(output.summary)
       modelReasons = new Map((output.reasons ?? []).filter((item) => resultIds.includes(item.assetId))
         .map((item) => [item.assetId, redact(item.reason.trim().replace(/^匹配理由\s*[:：]\s*/u, ''))]))
       unresolvedConditions = output.unresolvedConditions.map(redact)
-      if (!searched || output.resultIds.some((id) => !sources.has(id))) code = 'MODEL_INVALID_OUTPUT'
+      if (!searched || output.resultIds.some((id) => !sources.has(id))) {
+        provenanceFailure = true
+        code = 'MODEL_INVALID_OUTPUT'
+      }
     } catch (error) {
       code = invalidOutput(error) ? 'MODEL_INVALID_OUTPUT' : 'MODEL_UNAVAILABLE'
     } finally {
@@ -275,20 +298,21 @@ export class ModelFeatures {
     const ids = code && !resultIds.length ? [...sources.keys()].slice(0, 20) : resultIds
     const items = ids.map((id) => sources.get(id)!)
     const reasons = items.map((item) => {
-      const evidence = item.matches.filter((match) => match.field !== 'directory').map((match) =>
-        `${match.field === 'remark' ? '备注' : match.field === 'name' ? '文件名' : match.field === 'author' ? '创作人' : '属性'}「${redact(match.value)}」`)
+      const evidence = item.matches.filter((match) => match.field !== 'directory' || scopes.directoryNames).map((match) =>
+        `${match.field === 'directory' ? '目录线索' : match.field === 'remark' ? '备注' : match.field === 'name' ? '文件名' : match.field === 'author' ? '创作人' : '属性'}「${redact(match.value)}」`)
       return {
         assetId: item.assetId,
-        reason: (!code && modelReasons.get(item.assetId)) || (evidence.length
+        reason: (partialMatches.has(item.assetId) ? `部分匹配推荐（非最佳匹配）：${partialMatches.get(item.assetId)!.join('；')}。` : '') + ((!code && modelReasons.get(item.assetId)) || (evidence.length
           ? `本地检索匹配：${evidence.join('；')}。`
-          : '该素材位于本次搜索范围内，暂无可展示的匹配依据。')
+          : '该素材位于本次搜索范围内，暂无可展示的匹配依据。'))
       }
     })
     report(`检索完成，返回 ${items.length} 项结果${code ? '；模型未完成核对，以下为本地候选' : ''}。`)
     return { result: { items, unresolvedConditions: [...new Set(unresolvedConditions)],
       summary: code ? 'Agent 未完成核对，下列候选尚不能确认符合全部要求。' : summary || (items.length ? `本地查询返回 ${items.length} 项素材。` : '本地查询没有找到符合条件的素材。'),
       reasons, steps,
-      warning: code ? modelStatus(code) + ' 下列素材来自本次本地查询。' : null } }
+      warning: code ? (provenanceFailure ? '模型结果未通过本地来源校验，已排除无来源的素材。' : modelStatus(code)) + ' 下列素材来自本次本地查询，尚未完成全部条件核对。'
+        : partialMatches.size ? '包含部分匹配推荐，并非全部条件均符合，请查看每项未满足或未确认的条件。' : null } }
   }
 
   async suggestBatchRemark(text: string): Promise<Result<string>> {
@@ -393,7 +417,7 @@ function localDirectoryName(name: string) {
 }
 
 function queryContainsPathCriteria(filter: z.infer<typeof searchFilterSchema>) {
-  return [...(filter.nameTerms ?? []), ...(filter.remarkTerms ?? []), ...(filter.keywordTerms ?? []), filter.author ?? '']
+  return [...(filter.nameTerms ?? []), ...(filter.remarkTerms ?? []), ...(filter.keywordTerms ?? []), ...(filter.keywordGroups ?? []).flat(), filter.author ?? '']
     .some((text) => pathsInText.test(text))
 }
 
@@ -404,7 +428,7 @@ function safeSearchItem(item: SearchItem, scopes: ModelConfig['scopes']) {
     ...(scopes.fileNames ? { fileName: redact(item.fileName) } : {}),
     ...(scopes.authors ? { authors: item.authors.map(redact) } : {}),
     ...(scopes.remarks ? { remarkSummary: redact(item.remarkSummary) } : {}),
-    matches: item.matches.filter(({ field }) => field !== 'directory' &&
+    matches: item.matches.filter(({ field }) => (field !== 'directory' || scopes.directoryNames) &&
       (field !== 'name' || scopes.fileNames) && (field !== 'remark' || scopes.remarks) &&
       (field !== 'author' || scopes.authors)).map((match) => ({
         field: match.field, value: redact(match.value).slice(0, 400), terms: match.terms.map(redact)

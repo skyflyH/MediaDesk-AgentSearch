@@ -1,10 +1,18 @@
 import { createServer, type IncomingMessage } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { expect, it } from 'vitest'
-import { openAiTransport, probeModelConnection } from '../src/main/model-agent'
+import { openAiTransport, probeModelConnection, parseSearchAnswer, normalizeSearchAnswer } from '../src/main/model-agent'
 import { defaultModelConfig } from '../src/shared/model'
 
 const assetId = randomUUID()
+
+it('accepts one JSON answer with surrounding prose and defaults optional narrative fields', () => {
+  const answer = parseSearchAnswer('检索完成：\n```json\n' + JSON.stringify({ resultIds: [assetId], summary: null, extra: true }) + '\n```\n以上为结果。')
+  expect(normalizeSearchAnswer(answer)).toMatchObject({ resultIds: [assetId], summary: '', unresolvedConditions: [] })
+  expect(() => parseSearchAnswer('{"resultIds":[]} {"resultIds":[]}')).toThrow()
+  expect(() => normalizeSearchAnswer({ resultIds: ['invented'] })).toThrow()
+  expect(() => parseSearchAnswer('{"resultIds":[')).toThrow()
+})
 type RequestBody = {
   tools?: Array<{ function?: { name: string }; name?: string }>
   messages?: Array<{ role: string; content: string }>

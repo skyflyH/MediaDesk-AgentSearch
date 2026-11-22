@@ -190,6 +190,12 @@ internal sealed class Host : Form
             }
             case "reload": Get(args).View.CoreWebView2.Reload(); return null;
             case "devtools": Get(args).View.CoreWebView2.OpenDevToolsWindow(); return null;
+            case "copyText": {
+                var selection = await Get(args).View.ExecuteScriptAsync("(() => { const e=document.activeElement; return e && (e.tagName==='INPUT' || e.tagName==='TEXTAREA') && typeof e.selectionStart==='number' ? e.value.slice(e.selectionStart,e.selectionEnd) : String(window.getSelection() || ''); })()");
+                var text = JsonSerializer.Deserialize<string>(selection);
+                if (!string.IsNullOrEmpty(text)) Clipboard.SetText(text);
+                return null;
+            }
             case "pastePlain": {
                 var text = JsonSerializer.Serialize(Clipboard.ContainsText() ? Clipboard.GetText() : "");
                 await Get(args).View.ExecuteScriptAsync($"document.execCommand('insertText',false,{text})"); return null;
@@ -234,7 +240,9 @@ internal sealed class Host : Form
                 tray = new NotifyIcon { Icon = Program.LoadIcon(), Text = "MediaDesk", Visible = true };
                 var menu = new ContextMenuStrip();
                 foreach (var entry in new[] { ("打开", 0), ("快捷搜索", 1), ("退出", 2) }) { var index = entry.Item2; menu.Items.Add(entry.Item1, null, (_, _) => Send(new { tray = index })); }
-                tray.ContextMenuStrip = menu; tray.DoubleClick += (_, _) => Send(new { tray = 0 }); return null;
+                tray.ContextMenuStrip = menu;
+                tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Send(new { tray = 0 }); };
+                return null;
             }
             case "destroyTray": tray?.Dispose(); return null;
             case "cursor": return new { x = Cursor.Position.X, y = Cursor.Position.Y };

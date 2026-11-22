@@ -40,6 +40,16 @@ function press(key: string) {
   return event
 }
 
+it('captures copy and paste combinations instead of executing clipboard edits while recording', async () => {
+  const { controls } = await setup()
+  controls.startRecording({ kind: 'edit', target: 'copy' })
+  expect(press('C').defaultPrevented).toBe(true)
+  expect(controls.editKeys.value?.copy).toBe('Ctrl+C')
+  controls.startRecording({ kind: 'edit', target: 'paste' })
+  expect(press('V').defaultPrevented).toBe(true)
+  expect(controls.editKeys.value?.paste).toBe('Ctrl+V')
+})
+
 it('keeps one recording target and restores unfinished input when leaving the category', async () => {
   const { api, active, controls } = await setup()
   controls.startRecording({ kind: 'global', target: 'search' })

@@ -97,6 +97,17 @@ public sealed partial class LibraryDatabase
             };
             UpdateDraft(draft, transaction);
         }
+        // Publish the saved location/identity together with its text index. Directory
+        // search requires a present snapshot at current_path, so waiting for a watcher
+        // here temporarily hides renamed or property-handler-replaced files.
+        using (var snapshot = Command("""
+            DELETE FROM search_files WHERE path=$path COLLATE NOCASE AND asset_id<>$asset
+                AND EXISTS (SELECT 1 FROM search_files WHERE asset_id=$asset);
+            UPDATE search_files SET path=$path, identity=$identity, created=$created, present=1, modified=-1
+                WHERE asset_id=$asset;
+            """, transaction, ("$asset", assetId), ("$path", path),
+            ("$identity", identity.Identity), ("$created", identity.CreatedTicks)))
+            snapshot.ExecuteNonQuery();
         IndexAsset(assetId, transaction);
         transaction.Commit();
         return new(draft, remark, "unchanged", failure, RenamedPath: renamedPath);

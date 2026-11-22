@@ -1,3 +1,5 @@
+import { defaultEditShortcuts } from '../desktop/src/shared/desktop-controls'
+
 const view = (window as any).chrome.webview
 const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>()
 const listeners = new Map<string, Set<(...args: any[]) => void>>()
@@ -60,6 +62,10 @@ window.addEventListener('keydown', event => {
   if (event.defaultPrevented || document.querySelector('[data-recording="true"]')) return
   const key = event.key === ' ' ? 'Space' : event.key
   const accelerator = [event.ctrlKey && 'Control', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Super', key.length === 1 ? key.toUpperCase() : key].filter(Boolean).join('+')
+  // Native clipboard commands must retain the trusted keyboard gesture. Do not
+  // cancel and replay them asynchronously through the Node bridge.
+  const standard = Object.entries(defaultEditShortcuts).find(([, value]) => value === accelerator)
+  if (standard && (editKeys[standard[0]] ?? standard[1]) === accelerator) return
   if (accelerator !== 'Control+A' && (Object.values(editKeys).includes(accelerator) || ['Control+X','Control+C','Control+V','Control+Shift+V','Control+Z','Control+Y','Control+Shift+Z'].includes(accelerator))) event.preventDefault()
   view.postMessage({ input: { type: 'keyDown', key, control: event.ctrlKey, alt: event.altKey,
     shift: event.shiftKey, meta: event.metaKey, isComposing: event.isComposing, isAutoRepeat: event.repeat } })

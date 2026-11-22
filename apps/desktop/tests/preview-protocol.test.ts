@@ -1,10 +1,11 @@
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import { PreviewProtocol } from '../src/main/preview-protocol'
 import type { ServiceClient } from '../src/main/service-client'
 
 const { register, open } = vi.hoisted(() => ({ register: vi.fn(), open: vi.fn() }))
 vi.mock('electron', () => ({ protocol: { handle: register } }))
 vi.mock('node:fs/promises', () => ({ open }))
+beforeEach(() => { open.mockReset(); register.mockClear() })
 
 it('keeps the queue thumbnail and editor preview leases separate for the same asset', async () => {
   const request = vi.fn().mockResolvedValue({ result: {} })
@@ -17,10 +18,10 @@ it('keeps the queue thumbnail and editor preview leases separate for the same as
   if ('error' in thumbnail || 'error' in editor) throw new Error('Preview lease was not issued')
 
   const canReachService = async (url: string) => {
-    request.mockClear()
-    request.mockResolvedValueOnce({ error: { code: 'PREVIEW_UNAVAILABLE' } })
+    open.mockClear()
+    open.mockRejectedValueOnce(Error('fixture unavailable'))
     await handler(new Request(url))
-    return request.mock.calls.length === 1
+    return open.mock.calls.length === 1
   }
 
   expect(await canReachService(thumbnail.result)).toBe(true)
@@ -64,10 +65,29 @@ it('keeps quick search and workspace thumbnails independent for the same asset',
   if ('error' in workspace || 'error' in quickSearch) throw new Error('Preview lease was not issued')
 
   await media.release('asset', true, 42)
-  request.mockClear()
+  open.mockClear()
   expect((await handler(new Request(quickSearch.result))).status).toBe(404)
-  expect(request).not.toHaveBeenCalled()
-  request.mockResolvedValueOnce({ error: { code: 'PREVIEW_UNAVAILABLE' } })
+  expect(open).not.toHaveBeenCalled()
+  open.mockRejectedValueOnce(Error('fixture unavailable'))
   await handler(new Request(workspace.result))
-  expect(request).toHaveBeenCalledOnce()
+  expect(open).toHaveBeenCalledOnce()
+})
+
+it('cancels stale queued thumbnails and prioritizes the current editor preview', async () => {
+  let finish!: (value: unknown) => void
+  const request = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    .mockResolvedValue({ result: { path: 'current.jpg' } })
+  const media = new PreviewProtocol(() => ({ request }) as unknown as ServiceClient)
+  const active = media.issue('active', 'thumbnail')
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce())
+  const stale = media.issue('stale', 'thumbnail')
+  const next = media.issue('next', 'thumbnail')
+  await new Promise<void>(resolve => setImmediate(resolve))
+  await media.release('stale', true)
+  expect(await stale).toMatchObject({ error: { code: 'PREVIEW_CANCELLED' } })
+  const editor = media.issue('editor', 'image')
+  await new Promise<void>(resolve => setImmediate(resolve))
+  finish({ result: { path: 'active.jpg' } })
+  await Promise.all([active, next, editor])
+  expect(request.mock.calls.map(call => call[1].assetId)).toEqual(['active', 'editor', 'next'])
 })

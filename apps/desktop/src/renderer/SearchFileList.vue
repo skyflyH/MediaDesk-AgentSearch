@@ -21,7 +21,7 @@ function focusNeighbor(event: KeyboardEvent) {
 <template>
   <ul class="library-result-list" :class="`library-results-${layout}`" @keydown="focusNeighbor">
     <li v-for="item in items" :key="item.assetId" class="library-result" :data-library-result="item.assetId">
-      <QueueThumbnail :asset="{ ...item, originalName: item.fileName }" />
+      <QueueThumbnail :key="layout" :asset="{ ...item, originalName: item.fileName }" />
       <div class="library-result-metadata">
         <strong :title="item.fileName">{{ item.fileName }}</strong>
         <p v-if="reasons?.[item.assetId]" class="library-match-reason">{{ reasons[item.assetId] }}</p>

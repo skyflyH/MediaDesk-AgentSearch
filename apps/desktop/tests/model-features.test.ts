@@ -166,7 +166,7 @@ it('ignores a recommendation that arrives after an input edit', async () => {
   expect(app.current.data.suggestions?.directory).toBeUndefined()
 })
 
-it('checks local result provenance, limits to four tool calls and redacts disabled metadata', async () => {
+it('checks local result provenance, limits to six tool calls and redacts disabled metadata', async () => {
   const unknown = randomUUID()
   const app = fixture({ search: async (_query, tool) => {
     expect(await tool.details(unknown)).toHaveProperty('error')
@@ -174,6 +174,8 @@ it('checks local result provenance, limits to four tool calls and redacts disabl
     expect(JSON.stringify(results)).not.toMatch(/V001|remarkSummary|青岛/)
     const details = await tool.details(assetId)
     expect(JSON.stringify(details)).not.toContain('private')
+    await tool.search({ mediaKind: 'video' })
+    await tool.search({ mediaKind: 'video' })
     await tool.search({ mediaKind: 'video' })
     expect(await tool.search({})).toHaveProperty('error')
     return { resultIds: [assetId, unknown], summary: '模型声称的结果', unresolvedConditions: [] }
@@ -183,7 +185,7 @@ it('checks local result provenance, limits to four tool calls and redacts disabl
     items: [{ assetId, fileName: 'V001.mp4', matches: sample.matches }], warning: expect.any(String),
     reasons: [{ assetId, reason: expect.stringContaining('青岛海边日落') }]
   } })
-  expect(app.calls).toEqual(['search.filter', 'search.getDetails', 'search.filter'])
+  expect(app.calls).toEqual(['search.filter', 'search.getDetails', 'search.filter', 'search.filter', 'search.filter'])
 })
 
 it('keeps user-selected directory paths local while applying them to intelligent search', async () => {
@@ -369,6 +371,33 @@ it('does not call local tools or models when unconfigured', async () => {
 })
 
 const temporary = new Set<string>()
+
+it('uses exploratory results as context and labels candidates that fail the combined query', async () => {
+  const app = fixture({ search: async (_query, tools) => {
+    const context = await tools.search({ searchStage: 'explore', keywordGroups: [['沙狮']] })
+    expect(context).toMatchObject({ searchStage: 'explore' })
+    await tools.search({ searchStage: 'combined', keywordGroups: [['沙狮'], ['车', '火车', '摩托车']] })
+    return { resultIds: [assetId], summary: '未找到完整匹配，推荐部分候选。', unresolvedConditions: [],
+      partialMatches: [{ assetId, missingConditions: ['尚未确认由沙狮拍摄'] }] }
+  } })
+  const result = await app.features.search('找一下沙狮拍的车')
+  expect(result).toMatchObject({ result: { warning: expect.stringContaining('部分匹配'),
+    reasons: [{ assetId, reason: expect.stringContaining('尚未确认由沙狮拍摄') }] } })
+  expect(app.request).toHaveBeenCalledWith('search.filter', expect.not.objectContaining({ searchStage: expect.anything() }), expect.anything())
+})
+
+it('combines related concepts with mandatory keywords and property constraints', async () => {
+  const app = fixture({ search: async (_query, tools) => {
+    await tools.search({ keywordGroups: [['日落', '夕阳']], includeDirectoryNames: true,
+      propertyRanges: [{ field: 'sizeBytes', min: 10000000 }] })
+    return { resultIds: [assetId], summary: '相关素材', unresolvedConditions: [] }
+  } })
+  await app.features.search('青岛夕阳，大于10MB', { keywordTerms: ['青岛'] })
+  expect(app.request).toHaveBeenCalledWith('search.filter', expect.objectContaining({
+    keywordTerms: ['青岛'], keywordGroups: [['日落', '夕阳']], includeDirectoryNames: true,
+    propertyRanges: [{ field: 'sizeBytes', min: 10000000 }]
+  }), expect.anything())
+})
 afterEach(() => {
   const root = realpathSync(tmpdir())
   for (const directory of temporary) {

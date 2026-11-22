@@ -4,7 +4,7 @@
     <UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <AssemblyName>MediaDesk</AssemblyName><ApplicationManifest>app.manifest</ApplicationManifest>
     <Product>MediaDesk</Product><Title>MediaDesk</Title>
-    <Version>0.1.0</Version><FileVersion>0.1.0.0</FileVersion><AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <Version>0.1.1</Version><FileVersion>0.1.1.0</FileVersion><AssemblyVersion>0.1.1.0</AssemblyVersion>
     <ApplicationIcon>../../../resources/branding/mediadesk.ico</ApplicationIcon>
     <WebViewSdkDirectory Condition="'$(WebViewSdkDirectory)' == ''">$(MSBuildThisFileDirectory)..\..\..\artifacts\webview-sdk</WebViewSdkDirectory>
   </PropertyGroup>

@@ -12,6 +12,7 @@ public sealed class JsonLinesServer
     private readonly MediaPreviews? previews;
     private readonly PhotoIndex? photos;
     private readonly SemaphoreSlim searchGate = new(1);
+    private SearchSyncWorker? searchSync;
     private readonly Dictionary<string, Task<SearchPage>> searches = [];
     private readonly Dictionary<string, string> searchKeys = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DirectoryIndexProgress> indexProgress = new();
@@ -35,6 +36,8 @@ public sealed class JsonLinesServer
 
     public async Task RunAsync()
     {
+        await using var synchronization = new SearchSyncWorker(database.SearchDatabasePath, diagnostics);
+        searchSync = synchronization;
         while (await input.ReadLineAsync() is { } line)
         {
             var response = Respond(line);
@@ -205,7 +208,16 @@ public sealed class JsonLinesServer
                 RequireKeys(parameters, "assetId");
                 return new { path = database.RevealPath(AssetId(parameters)) };
             case "search.filter":
+                PrepareSearchScope(parameters);
                 return database.Filter(parameters);
+            case "search.setRoots":
+                RequireKeys(parameters, "directoryPaths");
+                var rootPaths = parameters.GetProperty("directoryPaths");
+                if (rootPaths.ValueKind != JsonValueKind.Array || rootPaths.GetArrayLength() > 50) throw InvalidParameters();
+                database.SetSearchRoots(rootPaths.EnumerateArray().Select(value =>
+                    value.ValueKind == JsonValueKind.String ? value.GetString()! : throw InvalidParameters()).ToArray());
+                searchSync?.Schedule();
+                return null;
             case "search.start":
                 return StartSearch(parameters);
             case "search.indexStart":
@@ -305,6 +317,7 @@ public sealed class JsonLinesServer
 
     private object StartSearch(JsonElement parameters, bool indexOnly = false)
     {
+        PrepareSearchScope(parameters);
         var key = (indexOnly ? "index:" : "search:") + parameters.GetRawText();
         // Coalesce repeated submissions while the same search is still running.
         if (searchKeys.TryGetValue(key, out var existing) && searches.TryGetValue(existing, out var pending) && !pending.IsCompleted)
@@ -323,6 +336,11 @@ public sealed class JsonLinesServer
         if (indexOnly) indexProgress[jobId] = new("queued", 0, 0);
         searches[jobId] = Task.Run(async () =>
         {
+            if (indexOnly && searchSync is not null)
+            {
+                await searchSync.EnsureIndexedAsync(input, progress => indexProgress[jobId] = progress);
+                return new SearchPage([], null);
+            }
             await searchGate.WaitAsync();
             try
             {
@@ -334,6 +352,13 @@ public sealed class JsonLinesServer
         });
         searchKeys[key] = jobId;
         return new { jobId };
+    }
+
+    private void PrepareSearchScope(JsonElement parameters)
+    {
+        if (searchSync is null || !parameters.TryGetProperty("directoryPaths", out _)) return;
+        var (paths, recursive) = LibraryDatabase.SearchIndexRequest(parameters);
+        if (database.RegisterSearchRoots(paths, recursive)) searchSync.Schedule();
     }
 
     private object SearchStatus(string jobId)

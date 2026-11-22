@@ -31,7 +31,7 @@ public sealed partial class LibraryDatabase
         };
     }
 
-    internal static Dictionary<string, double> ReadSearchProperties(string path, bool metadata = true)
+    internal static Dictionary<string, double> ReadSearchProperties(string path, bool metadata = true, bool refresh = false)
     {
         try
         {
@@ -39,12 +39,12 @@ public sealed partial class LibraryDatabase
             var length = file.Length;
             var modified = file.LastWriteTimeUtc.Ticks;
             if (!metadata) return new() { ["sizeBytes"] = length };
-            if (propertyCache.TryGetValue(path, out var cached) && cached.Length == length && cached.Modified == modified)
+            if (!refresh && propertyCache.TryGetValue(path, out var cached) && cached.Length == length && cached.Modified == modified)
                 return cached.Values;
             var values = WindowsProperties.ReadSearchNumbers(path);
             foreach (var (key, value) in EmbeddedMetadata.ReadSearchNumbers(path)) values.TryAdd(key, value);
             values["sizeBytes"] = length;
-            if (propertyCache.Count > 10000) propertyCache.Clear();
+            if (propertyCache.Count > 256) propertyCache.Clear();
             propertyCache[path] = (length, modified, values);
             return values;
         }

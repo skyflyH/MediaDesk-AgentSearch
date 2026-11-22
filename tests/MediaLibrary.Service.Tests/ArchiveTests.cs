@@ -72,6 +72,9 @@ public sealed class ArchiveTests
             sqlite.Open();
             using var command = sqlite.CreateCommand();
             command.CommandText = """
+                DROP TABLE search_roots;
+                DROP TABLE search_files;
+                DROP TABLE search_folders;
                 DROP INDEX file_operations_asset;
                 CREATE UNIQUE INDEX file_operations_asset ON file_operations(asset_id) WHERE phase <> 'complete';
                 PRAGMA user_version = 9;

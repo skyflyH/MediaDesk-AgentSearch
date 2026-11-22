@@ -563,7 +563,7 @@ function toggleFolder(row: Extract<typeof rows.value[number], { kind: 'folder' }
             :aria-pressed="highlightedAssets.has(asset.assetId)" :data-asset-id="asset.assetId" :title="asset.originalName"
             @click="select($event, asset.assetId)" @contextmenu.prevent="openAssetMenu($event, asset.assetId)"
             @keydown="menuKey($event, asset.assetId)">
-            <QueueThumbnail :asset="asset" :preview-loading="asset.assetId === loadingPhotoId" />
+            <QueueThumbnail :key="layout" :asset="asset" :preview-loading="asset.assetId === loadingPhotoId" />
             <span class="queue-card-name">{{ asset.originalName }}</span>
           </button>
         </div>

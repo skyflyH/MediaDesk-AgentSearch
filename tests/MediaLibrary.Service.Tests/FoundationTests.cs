@@ -22,7 +22,7 @@ public sealed class FoundationTests : IDisposable
         }
 
         using var reopened = new LibraryDatabase(DatabasePath);
-        Assert.Equal(10, reopened.Health().SchemaVersion);
+        Assert.Equal(11, reopened.Health().SchemaVersion);
         using var inspect = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = DatabasePath,

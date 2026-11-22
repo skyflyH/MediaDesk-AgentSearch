@@ -23,7 +23,8 @@ internal sealed record SearchFilter(string? MediaKind = null, string? DirectoryI
     bool IncludeSubdirectories = true, string? Format = null, string? DateField = null, string? DateFrom = null,
     string? DateToExclusive = null, string[]? NameTerms = null, string[]? RemarkTerms = null, string? Author = null,
     int Limit = 50, string? Cursor = null, string[]? DirectoryPaths = null, string[]? KeywordTerms = null, string? ResultKind = null,
-    int? CaptureMinuteFrom = null, int? CaptureMinuteToExclusive = null, PropertyRange[]? PropertyRanges = null);
+    int? CaptureMinuteFrom = null, int? CaptureMinuteToExclusive = null, PropertyRange[]? PropertyRanges = null,
+    string[][]? KeywordGroups = null, bool IncludeDirectoryNames = false);
 
 public sealed partial class LibraryDatabase
 {
@@ -48,10 +49,9 @@ public sealed partial class LibraryDatabase
     internal SearchPage Filter(SearchFilter input, TimeZoneInfo timeZone)
     {
         var filter = NormalizeFilter(input);
+        if (filter.DirectoryPaths is not null) EnsureSearchRoots(filter.DirectoryPaths, filter.IncludeSubdirectories);
         var folders = filter.Cursor is null ? FindSearchDirectories(filter, timeZone) : null;
         if (filter.ResultKind == "directories") return new([], null, folders);
-        if (filter.DirectoryPaths is not null && filter.Cursor is null)
-            IndexSearchDirectories(filter.DirectoryPaths, filter.IncludeSubdirectories);
         var cursorKey = CursorKey(filter, timeZone);
         var cursor = filter.Cursor is null ? null : ReadCursor(filter.Cursor, cursorKey);
         using var transaction = connection.BeginTransaction(deferred: true);
@@ -70,7 +70,7 @@ public sealed partial class LibraryDatabase
     {
         var command = connection.CreateCommand();
         command.Transaction = transaction;
-        var predicates = new List<string> { filter.DirectoryPaths is null ? "a.archived = 1" : "1 = 1" };
+        var predicates = new List<string> { filter.DirectoryPaths is null ? "a.archived = 1" : "EXISTS (SELECT 1 FROM search_files sf WHERE sf.asset_id = a.id AND sf.path = l.current_path COLLATE NOCASE AND sf.present = 1)" };
 
         void Where(string condition, string name, object value)
         {
@@ -116,15 +116,13 @@ public sealed partial class LibraryDatabase
         AddTextTerms("remark_key", filter.RemarkTerms!);
         if (filter.PropertyRanges is { Length: > 0 } ranges)
         {
-            connection.CreateFunction<string, string, double?>("media_property", (path, field) =>
-                ReadSearchProperties(path, field != "sizeBytes").TryGetValue(field, out var number) ? number : null);
             for (var index = 0; index < ranges.Length; index++)
             {
                 var range = ranges[index];
                 var prefix = $"$property{index}";
                 command.Parameters.AddWithValue(prefix + "_field", range.Field);
-                if (range.Min is { } min) Where($"media_property(l.current_path, {prefix}_field) {(range.MinExclusive ? ">" : ">=")} {prefix}_min", prefix + "_min", min);
-                if (range.Max is { } max) Where($"media_property(l.current_path, {prefix}_field) {(range.MaxExclusive ? "<" : "<=")} {prefix}_max", prefix + "_max", max);
+                if (range.Min is { } min) Where($"(SELECT json_extract(sf.numbers, '$.' || {prefix}_field) FROM search_files sf WHERE sf.asset_id = a.id AND sf.present = 1 LIMIT 1) {(range.MinExclusive ? ">" : ">=")} {prefix}_min", prefix + "_min", min);
+                if (range.Max is { } max) Where($"(SELECT json_extract(sf.numbers, '$.' || {prefix}_field) FROM search_files sf WHERE sf.asset_id = a.id AND sf.present = 1 LIMIT 1) {(range.MaxExclusive ? "<" : "<=")} {prefix}_max", prefix + "_max", max);
             }
         }
         for (var index = 0; index < filter.KeywordTerms!.Length; index++)
@@ -141,6 +139,29 @@ public sealed partial class LibraryDatabase
             var directoryMatch = filter.ResultKind == "files" ? "" : $" OR instr(s.directory_key, {parameter}) > 0";
             Where($"(instr(s.name_key, {parameter}) > 0 OR instr(s.remark_key, {parameter}) > 0{directoryMatch})",
                 parameter, filter.KeywordTerms[index]);
+        }
+        for (var group = 0; group < (filter.KeywordGroups?.Length ?? 0); group++)
+        {
+            var alternatives = new List<string>();
+            for (var index = 0; index < filter.KeywordGroups![group].Length; index++)
+            {
+                var parameter = $"$related{group}_{index}";
+                command.Parameters.AddWithValue(parameter, filter.KeywordGroups[group][index]);
+                var directoryText = "s.directory_key";
+                if (filter.DirectoryPaths is { Length: > 0 } selected)
+                {
+                    var cases = selected.OrderBy(path => path.Length).Select((path, rootIndex) => {
+                        var rootParameter = $"$relatedRoot{group}_{index}_{rootIndex}";
+                        command.Parameters.AddWithValue(rootParameter, path);
+                        var offset = Math.Max(1, path.Length - Path.GetFileName(path).Length + 1);
+                        return $"WHEN s.directory_key={rootParameter} OR substr(s.directory_key,1,length({rootParameter})+1)={rootParameter} || char(92) THEN substr(s.directory_key,{offset})";
+                    });
+                    directoryText = "(CASE " + string.Join(" ", cases) + " ELSE '' END)";
+                }
+                var directory = filter.IncludeDirectoryNames ? $" OR instr({directoryText}, {parameter}) > 0" : "";
+                alternatives.Add($"(instr(s.name_key, {parameter}) > 0 OR instr(s.remark_key, {parameter}) > 0{directory})");
+            }
+            predicates.Add("(" + string.Join(" OR ", alternatives) + ")");
         }
         var joins = SearchFrom + " JOIN asset_search s ON s.row_id = a.queue_position";
         var where = string.Join(" AND ", predicates);
@@ -251,7 +272,7 @@ public sealed partial class LibraryDatabase
         new MediaFile(row.GetString(6), row.GetInt64(7)), JsonSerializer.Deserialize<string[]>(row.GetString(8)) ?? [],
         row.GetString(9), row.GetString(10), row.GetString(11), row.GetString(12));
 
-    private static SearchItem DescribeSearch(SearchRow row, SearchFilter? filter)
+    private SearchItem DescribeSearch(SearchRow row, SearchFilter? filter)
     {
         var name = Path.GetFileName(row.Path);
         var evidence = new List<SearchEvidence>();
@@ -272,6 +293,13 @@ public sealed partial class LibraryDatabase
                 if (filter.ResultKind != "files" && TextKey(Path.GetDirectoryName(row.Path)!).Contains(term, StringComparison.Ordinal))
                     evidence.Add(new("directory", Path.GetDirectoryName(row.Path)!, [term]));
             }
+            foreach (var term in (filter.KeywordGroups ?? []).SelectMany(group => group).Distinct())
+            {
+                if (TextKey(name).Contains(term, StringComparison.Ordinal)) evidence.Add(new("name", name, [term]));
+                if (TextKey(row.Remark).Contains(term, StringComparison.Ordinal)) evidence.Add(new("remark", Excerpt(row.Remark, term), [term]));
+                if (filter.IncludeDirectoryNames && TextKey(SearchDirectoryLabel(row.Path, filter.DirectoryPaths)).Contains(term, StringComparison.Ordinal))
+                    evidence.Add(new("directory", SearchDirectoryLabel(row.Path, filter.DirectoryPaths), [term]));
+            }
             if (filter.Author is { } author)
                 evidence.Add(new("author", string.Join("、", row.Authors.Where(value => TextKey(value.Trim()) == author)), []));
             if (filter.DirectoryId is not null) evidence.Add(new("directory", Path.GetDirectoryName(row.Path)!, []));
@@ -284,7 +312,7 @@ public sealed partial class LibraryDatabase
                 !evidence.Any(match => match.Field == "capturedAt"))
                 evidence.Add(new("capturedAt", row.CapturedAt!, []));
         }
-        var properties = ReadSearchProperties(row.Path, filter?.PropertyRanges?.Any(range => range.Field != "sizeBytes") == true || filter is null);
+        var properties = CachedSearchNumbers(row.AssetId) ?? ReadSearchProperties(row.Path, filter?.PropertyRanges?.Any(range => range.Field != "sizeBytes") == true || filter is null);
         foreach (var range in filter?.PropertyRanges ?? [])
             if (properties.TryGetValue(range.Field, out var number))
                 evidence.Add(new("properties", DescribeSearchProperty(range.Field, number), []));
@@ -307,6 +335,15 @@ public sealed partial class LibraryDatabase
         return (start > 0 ? "…" : "") + text[start..end] + (end < text.Length ? "…" : "");
     }
 
+    private static string SearchDirectoryLabel(string path, string[]? roots)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        var root = roots?.OrderBy(value => value.Length).FirstOrDefault(value => WindowsPaths.Inside(directory, value));
+        if (root is null) return Path.GetFileName(directory);
+        var relative = Path.GetRelativePath(root, directory);
+        return Path.GetFileName(root) + (relative == "." ? "" : Path.DirectorySeparatorChar + relative);
+    }
+
     private static SearchFilter ParseFilter(JsonElement parameters)
     {
         try { return parameters.Deserialize<SearchFilter>(FilterJson) ?? throw InvalidSearch(); }
@@ -315,6 +352,8 @@ public sealed partial class LibraryDatabase
 
     private static SearchFilter NormalizeFilter(SearchFilter input)
     {
+        if (input.KeywordGroups is { } groups && (groups.Length > 6 || groups.Any(group => group is null || group.Length is < 1 or > 6)))
+            throw InvalidSearch();
         if (input.PropertyRanges is { } propertyRanges && (propertyRanges.Length > 12 || propertyRanges.Any(range =>
             range is null || (range.Field != "sizeBytes" && !SearchPropertyNames.ContainsKey(range.Field)) ||
             (range.Min is null && range.Max is null) ||
@@ -348,7 +387,8 @@ public sealed partial class LibraryDatabase
             DirectoryId = directoryId, Format = format, DateField = input.DateField ?? "createdAt",
             DirectoryPaths = NormalizeSearchPaths(input.DirectoryPaths), KeywordTerms = TextTerms(input.KeywordTerms),
             Author = input.Author is null ? null : BoundedKey(input.Author, 120),
-            NameTerms = TextTerms(input.NameTerms), RemarkTerms = TextTerms(input.RemarkTerms)
+            NameTerms = TextTerms(input.NameTerms), RemarkTerms = TextTerms(input.RemarkTerms),
+            KeywordGroups = input.KeywordGroups?.Select(TextTerms).ToArray()
         };
     }
 

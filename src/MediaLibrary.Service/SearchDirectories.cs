@@ -5,8 +5,6 @@ internal sealed record DirectoryIndexProgress(string Phase, int Processed, int D
 public sealed partial class LibraryDatabase
 {
     internal string SearchDatabasePath => connection.DataSource;
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, long Modified, long XmpLength, long XmpModified)> searchStamps = new();
-
     internal SearchPage IndexDirectories(System.Text.Json.JsonElement parameters, Action<DirectoryIndexProgress>? progress = null)
     {
         var filter = NormalizeFilter(ParseFilter(parameters));
@@ -15,7 +13,7 @@ public sealed partial class LibraryDatabase
         return new([], null);
     }
 
-    private static SearchDirectoryItem[]? FindSearchDirectories(SearchFilter filter, TimeZoneInfo timeZone)
+    private SearchDirectoryItem[]? FindSearchDirectories(SearchFilter filter, TimeZoneInfo timeZone)
     {
         if (filter.DirectoryPaths is null || filter.ResultKind == "files" || filter.MediaKind is not null || filter.PropertyRanges is { Length: > 0 } ||
             filter.Format is not null || filter.Author is not null || filter.RemarkTerms!.Length > 0 ||
@@ -25,110 +23,32 @@ public sealed partial class LibraryDatabase
         var keywords = filter.KeywordTerms!.Select(term => (Term: term, Range: DateKeywordRange(term, timeZone))).ToArray();
         foreach (var root in filter.DirectoryPaths)
         {
-            if (!Directory.Exists(root)) throw new RequestError("SOURCE_UNAVAILABLE", $"搜索目录不可访问：{root}");
-            try
+            using var command = Command("SELECT path, created FROM search_folders WHERE substr(path,1,length($prefix)) = $prefix COLLATE NOCASE", null,
+                ("$prefix", Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar));
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
             {
-                foreach (var path in Directory.EnumerateDirectories(root, "*", new EnumerationOptions {
-                    RecurseSubdirectories = filter.IncludeSubdirectories, IgnoreInaccessible = true,
-                    AttributesToSkip = FileAttributes.ReparsePoint
-                }))
-                {
+                    var path = reader.GetString(0);
+                    if (!filter.IncludeSubdirectories && !WindowsPaths.SamePath(Path.GetDirectoryName(path)!, root)) continue;
                     var name = Path.GetFileName(path);
-                    var created = Directory.GetCreationTimeUtc(path).ToString("O");
+                    var created = reader.GetString(1);
                     var nameKey = TextKey(name);
                     if (!filter.NameTerms!.All(term => nameKey.Contains(term, StringComparison.Ordinal))) continue;
+                    if (!(filter.KeywordGroups ?? []).All(group => group.Any(term => nameKey.Contains(term, StringComparison.Ordinal)))) continue;
                     if (!keywords.All(keyword => keyword.Range is { } range
                         ? DateKeywordMatches(created, range)
                         : nameKey.Contains(keyword.Term, StringComparison.Ordinal))) continue;
                     if (filter.DateFrom is { } from && string.CompareOrdinal(created, UtcBoundary(from, timeZone)) < 0) continue;
                     if (filter.DateToExclusive is { } until && string.CompareOrdinal(created, UtcBoundary(until, timeZone)) >= 0) continue;
                     found[path] = new(name, path, created);
-                }
-            }
-            catch (Exception error) when (IsFileError(error))
-            {
-                throw new RequestError("SOURCE_UNAVAILABLE", $"无法搜索目录：{root}");
             }
         }
         return found.Count == 0 ? null : found.Values.OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private void IndexSearchDirectories(string[] paths, bool recursive, Action<DirectoryIndexProgress>? progress = null)
+    private void RefreshSearchProperties(string id, string path, Microsoft.Data.Sqlite.SqliteTransaction transaction,
+        MediaProperties properties, DateTime? captured)
     {
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var files = new List<string>();
-        progress?.Invoke(new("scanning", 0, 0));
-        foreach (var root in paths)
-        {
-            if (!Directory.Exists(root))
-                throw new RequestError("SOURCE_UNAVAILABLE", $"搜索目录不可访问：{root}");
-            var options = new EnumerationOptions
-            {
-                RecurseSubdirectories = recursive,
-                IgnoreInaccessible = true,
-                // Do not follow directory junctions or symbolic links out of the selected tree.
-                AttributesToSkip = FileAttributes.ReparsePoint
-            };
-            try
-            {
-                foreach (var path in Directory.EnumerateFiles(root, "*", options))
-                {
-                    if (!visited.Add(path)) continue;
-                    var extension = Path.GetExtension(path);
-                    if (!PhotoExtensions.Contains(extension) && !VideoExtensions.Contains(extension) && !RawPhoto.Supports(extension))
-                        continue;
-                    files.Add(path);
-                    if (files.Count % 100 == 0) progress?.Invoke(new("scanning", 0, files.Count));
-                }
-            }
-            catch (Exception error) when (IsFileError(error))
-            {
-                throw new RequestError("SOURCE_UNAVAILABLE", $"无法扫描搜索目录：{root}");
-            }
-        }
-        var processed = 0;
-        progress?.Invoke(new("indexing", 0, files.Count, files.Count));
-        foreach (var path in files)
-        {
-            try {
-                    var extension = Path.GetExtension(path);
-                    var file = new FileInfo(path);
-                    var cacheKey = SearchDatabasePath + "|" + path;
-                    var xmp = RawPhoto.Supports(extension) ? new FileInfo(RawSidecar.PathFor(path)) : null;
-                    var stamp = (file.Length, file.LastWriteTimeUtc.Ticks, xmp?.Exists == true ? xmp.Length : -1,
-                        xmp?.Exists == true ? xmp.LastWriteTimeUtc.Ticks : -1);
-                    if (searchStamps.TryGetValue(cacheKey, out var previous) && previous == stamp) continue;
-                    var imported = ImportOne(path, queue: false);
-                    if (imported.AssetId is not { } id) continue;
-                    using var transaction = connection.BeginTransaction(deferred: false);
-                    var located = Locate(id, transaction);
-                    if (WindowsPaths.SamePath(located.Path, path))
-                    {
-                        RefreshSearchProperties(id, path, transaction);
-                        IndexAsset(id, transaction);
-                    }
-                    transaction.Commit();
-                    if (searchStamps.Count > 100000) searchStamps.Clear();
-                    searchStamps[cacheKey] = stamp;
-            }
-            catch (Exception error) when (IsFileError(error))
-            {
-                throw new RequestError("SOURCE_UNAVAILABLE", $"无法读取搜索素材：{path}");
-            }
-            finally {
-                processed++;
-                progress?.Invoke(new("indexing", processed, files.Count, files.Count));
-            }
-        }
-        progress?.Invoke(new("complete", processed, files.Count, files.Count));
-    }
-
-    private void RefreshSearchProperties(string id, string path, Microsoft.Data.Sqlite.SqliteTransaction transaction)
-    {
-        var properties = WindowsProperties.Read(path);
-        var captured = properties.CapturedAt;
-        if (captured is null && Path.GetExtension(path).ToLowerInvariant() is ".mp4" or ".mov" or ".m4v")
-            captured = EmbeddedMetadata.ReadVideoCaptureTime(path);
         using var update = Command("""
             UPDATE asset_details SET
                 remark = CASE WHEN remark_state = 'library_only' AND $raw = 0 THEN remark ELSE $remark END,
