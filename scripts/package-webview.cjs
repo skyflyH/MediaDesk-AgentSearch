@@ -22,12 +22,12 @@ function copy(directory, output) {
 // Explicit allowlist: diagnostic profiles and obsolete build files never ship.
 for (const name of ['MediaDesk.exe', 'MediaDesk.dll', 'MediaDesk.deps.json', 'MediaDesk.runtimeconfig.json',
   'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'WebView2Loader.dll',
-  'node.exe', 'Start-MediaDesk.cmd', 'Start-MediaDesk.ps1'])
+  'node.exe'])
   fs.copyFileSync(path.join(source, name), path.join(destination, name))
 for (const directory of ['main', 'preload', 'renderer', 'service']) copy(path.join(source, directory), path.join(destination, directory))
 fs.writeFileSync(path.join(destination, 'README.txt'), `MediaDesk ${version} / Windows x64
 Requires Microsoft .NET 10 Desktop Runtime x64 and Microsoft Edge WebView2 Runtime.
-Extract the entire archive and run Start-MediaDesk.cmd.
+Extract the entire archive and double-click MediaDesk.exe. Keep all bundled files together.
 Data: %LOCALAPPDATA%\\ai-photos-manager
 Bundled Node.js license: https://github.com/nodejs/node/blob/v22.18.0/LICENSE
 WebView2 SDK license: https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.2535.41/License

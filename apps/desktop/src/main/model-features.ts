@@ -308,9 +308,26 @@ export class ModelFeatures {
       }
     })
     report(`检索完成，返回 ${items.length} 项结果${code ? '；模型未完成核对，以下为本地候选' : ''}。`)
+    const groups: NonNullable<AgentSearchResult['groups']> = []
+    const best = items.filter(item => !code && !partialMatches.has(item.assetId))
+    const partial = items.filter(item => !code && partialMatches.has(item.assetId))
+    const groupEvidence = (members: SearchItem[]) => {
+      const terms = [...new Set(members.flatMap(item => item.matches
+        .filter(match => match.field !== 'directory' || scopes.directoryNames)
+        .flatMap(match => match.terms).map(redact)))].slice(0, 12)
+      return terms.length ? `本组命中线索：${terms.map(term => `「${term}」`).join('、')}。` : ''
+    }
+    if (best.length) groups.push({ kind: 'best', assetIds: best.map(item => item.assetId),
+      summary: [summary || '这些素材通过了本轮组合检索及模型核对。', groupEvidence(best),
+        ...unresolvedConditions.map(condition => `尚未确认：${condition}`)].filter(Boolean).join(' ') })
+    if (partial.length) groups.push({ kind: 'partial', assetIds: partial.map(item => item.assetId),
+      summary: [groupEvidence(partial), '仅满足部分搜索条件，并非最佳匹配。',
+        `未满足或未确认：${[...new Set(partial.flatMap(item => partialMatches.get(item.assetId) ?? []))].join('；')}。`].filter(Boolean).join(' ') })
+    if (code && items.length) groups.push({ kind: 'unverified', assetIds: items.map(item => item.assetId),
+      summary: `${groupEvidence(items)}这些素材来自本次本地检索，尚未完成全部条件核对。` })
     return { result: { items, unresolvedConditions: [...new Set(unresolvedConditions)],
       summary: code ? 'Agent 未完成核对，下列候选尚不能确认符合全部要求。' : summary || (items.length ? `本地查询返回 ${items.length} 项素材。` : '本地查询没有找到符合条件的素材。'),
-      reasons, steps,
+      reasons, groups, steps,
       warning: code ? (provenanceFailure ? '模型结果未通过本地来源校验，已排除无来源的素材。' : modelStatus(code)) + ' 下列素材来自本次本地查询，尚未完成全部条件核对。'
         : partialMatches.size ? '包含部分匹配推荐，并非全部条件均符合，请查看每项未满足或未确认的条件。' : null } }
   }

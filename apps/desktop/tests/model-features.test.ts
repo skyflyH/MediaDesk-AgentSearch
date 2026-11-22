@@ -372,6 +372,26 @@ it('does not call local tools or models when unconfigured', async () => {
 
 const temporary = new Set<string>()
 
+it('groups best matches above partial keyword matches and keeps unchecked candidates separate', async () => {
+  const partialId = randomUUID()
+  const app = fixture({ search: async (_query, tools) => {
+    await tools.search({ searchStage: 'explore', keywordTerms: ['青岛'] })
+    await tools.search({ searchStage: 'combined', keywordTerms: ['青岛', '日落'] })
+    return { resultIds: [partialId, assetId], summary: '最匹配的素材包含青岛和日落线索。', unresolvedConditions: [],
+      partialMatches: [{ assetId: partialId, missingConditions: ['未找到日落线索'] }] }
+  } })
+  app.request.mockResolvedValueOnce({ result: { items: [{ ...sample, assetId: partialId }], nextCursor: null } })
+  const reply = await app.features.search('青岛日落')
+  expect(reply).toMatchObject({ result: { groups: [
+    { kind: 'best', assetIds: [assetId], summary: expect.stringContaining('青岛和日落') },
+    { kind: 'partial', assetIds: [partialId], summary: expect.stringContaining('未找到日落线索') }
+  ] } })
+  const broken = fixture({ search: async (_query, tools) => { await tools.search({}); throw new Error('offline') } })
+  expect(await broken.features.search('青岛')).toMatchObject({ result: {
+    groups: [{ kind: 'unverified', assetIds: [assetId] }]
+  } })
+})
+
 it('uses exploratory results as context and labels candidates that fail the combined query', async () => {
   const app = fixture({ search: async (_query, tools) => {
     const context = await tools.search({ searchStage: 'explore', keywordGroups: [['沙狮']] })

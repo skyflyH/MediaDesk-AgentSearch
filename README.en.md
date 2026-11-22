@@ -6,11 +6,11 @@ MediaDesk is a Windows application for organizing local photos and videos. Brows
 
 ## Download and install
 
-Packaged builds are distributed through this repository's **Releases** page. End users do not need to clone the source or install development tools.
+The current version is **v0.1.1**. Published builds are available on the repository's [Releases](https://github.com/skyflyH/MediaDesk-AgentSearch/releases) page. Local debug packages are generated in `dist/` and may not have been uploaded to Releases. End users do not need to clone the source or install development tools.
 
 1. Install Microsoft Edge WebView2 Runtime and the .NET 10 Desktop Runtime x64.
 2. Download `MediaDesk-<version>-win-x64.zip` from the release Assets.
-3. Extract the entire archive to a local directory and run `Start-MediaDesk.cmd`. Do not run it inside the archive.
+3. Extract the entire archive to a local directory and double-click **`MediaDesk.exe`**. No CMD or PowerShell launcher is required. Do not run it inside the archive or move the EXE away from its bundled files.
 4. Before updating, quit the old version from the tray and extract the new version into a new directory. Default user data and model settings are stored outside the application directory.
 
 Download the matching `.zip.sha256` file and compare it with `Get-FileHash <archive-path> -Algorithm SHA256` if desired. A matching hash verifies file integrity, not Windows publisher signing.
@@ -22,10 +22,66 @@ Download the matching `.zip.sha256` file and compare it with `Get-FileHash <arch
 - Edit names, remarks, and authors; automatically save drafts; process batches and save copies.
 - Store RAW remarks in companion XMP files. Metadata write support varies by format, and the UI reports the outcome.
 - Search names, directories, remarks, dates, and media properties; open directories or locate source items in File Explorer.
-- Configure an OpenAI-compatible endpoint for naming, remark suggestions, and intelligent search. Photo semantic search requires a separately deployed Chinese-CLIP model.
-- Use the tray, global quick search, configurable shortcuts, themes, fonts, and backgrounds.
+- Configure OpenAI-compatible endpoints for naming, remark suggestions, and natural-language intelligent search. Save multiple providers and models and check their connections.
+- Use the tray, global quick search, configurable shortcuts, login startup, themes, fonts, and backgrounds. A single click on the tray icon opens the main window.
+- Standard text fields support cut, copy, and paste shortcuts. Shortcut recording fields retain their key capture behavior.
+
+## Supported file formats
+
+Import and directory indexing currently recognize the following extensions, case-insensitively.
+
+| Type | Formats and extensions |
+| --- | --- |
+| JPEG | `.jpg`, `.jpeg` |
+| PNG | `.png` |
+| HEIF / HEIC | `.heif`, `.heic` |
+| WebP | `.webp` |
+| GIF | `.gif` |
+| BMP | `.bmp` |
+| TIFF | `.tif`, `.tiff` |
+| Video containers | MP4 `.mp4`, QuickTime `.mov`, M4V `.m4v`, WebM `.webm`, Matroska `.mkv`, AVI `.avi` |
+
+RAW extensions are listed by manufacturer below. This is the application's supported extension list, rather than the full list supported by LibRaw.
+
+| Manufacturer / standard | RAW extensions |
+| --- | --- |
+| Canon | `.cr2`, `.cr3` |
+| Nikon | `.nef`, `.nrw` |
+| Sony | `.arw` |
+| Fujifilm | `.raf` |
+| Panasonic | `.rw2` |
+| Olympus / OM SYSTEM | `.orf` |
+| Pentax | `.pef` |
+| Adobe Digital Negative, including DNG files from some Leica, Ricoh, mobile, and other devices | `.dng` |
+
+**Preview and metadata capabilities:**
+
+- RAW previews use LibRaw to extract embedded previews or perform half-size decoding when necessary. Compatibility depends on the camera model, RAW compression, and file integrity. Recognizing an extension does not mean every camera model has been tested.
+- HEIC / HEIF, TIFF, and some other image previews depend on Windows image decoders. Some systems require additional image extensions. GIF thumbnails and full previews may behave differently.
+- Video extensions identify containers, not guaranteed playback support for every codec inside them. Direct playback depends on WebView2 / system decoding support. Optional FFmpeg can generate compatible preview proxies when direct playback fails, keeping the source video unchanged.
+- Reading and writing remarks, authors, and capture properties depends on the format, Windows property handlers, and optional ExifTool. RAW remarks support companion `.xmp` files; these are auxiliary files, not independently imported photos or videos. The UI reports the actual write outcome.
+
+## Search and intelligent search
+
+Standard search finds file names, remarks, and directory clues. Intelligent search interprets natural language and combines names, remarks, authors, directories, and readable metadata. Filters include media type, format, creation or capture dates, capture time of day, file size, shutter speed, aperture, ISO, focal length, exposure compensation, resolution, video duration, frame rate, and bitrate. Missing metadata is not treated as satisfying a condition.
+
+The agent uses actual candidates to interpret relationships between keywords and expand closely related terms. For example, when asked to find vehicles photographed by a named person, it can first search that person's name in real names and remarks, then combine those clues with trains, cars, or motorcycles instead of assuming that “vehicle” means only a car.
+
+Results are grouped: **best matches** appear first with a shared explanation; **partial keyword matches** appear below with matched clues and missing or unconfirmed conditions. Individual cards no longer repeat match explanations. Unchecked candidates are labeled separately. Invalid final output receives at most one format correction without repeating local searches, and every returned item must still pass provenance checks against this search's local results.
+
+If an initial index is still loading and no results are found, the UI suggests waiting for indexing to finish before searching again. Saving source names or remarks from the organizer synchronizes their search index without restarting the app. Automatically saved editing drafts are separate from changes written to source files.
+
+Intelligent search primarily uses text and metadata. It does not automatically upload local images to an online multimodal model. Optional local photo semantic search requires a separately deployed Chinese-CLIP model; default packages do not include its weights. Video scene recognition is not provided.
 
 ## Architecture
+
+Directory search persists its index and metadata snapshots in SQLite. Existing indexes are searchable while background synchronization runs. Adding a directory or upgrading to persistent snapshots requires an initial background validation.
+
+Where NTFS USN journal access is available, persisted checkpoints replay changes across restarts. Unsupported filesystems, unavailable journals, or restricted permissions fall back to directory watching with a background snapshot comparison at startup. Unchanged files reuse metadata. Journal gaps and event-buffer overflows trigger reconciliation; offline directories retain their index. The app neither elevates itself nor creates or modifies the system journal.
+
+A single synchronization queue coalesces events and bounds pending paths. Overlapping roots share monitoring; removing a root releases its watcher. Idle operation does not repeatedly traverse directories. Subsequent queries see synchronized changes, and ordinary searches refresh once after initial synchronization completes.
+
+Thumbnail work is queued for the current view. Switching views or moving items out of view cancels pending work that is no longer needed and prioritizes the active preview. Work already decoding through system APIs may need to finish before it can be released.
 
 | Component | Implementation |
 | --- | --- |
@@ -100,11 +156,12 @@ npm run package:win
 
 `npm run build` builds the service, UI, and native host and assembles a runnable directory at `artifacts/webview-app/`. `npm run package:win` rebuilds and creates the WebView2 ZIP; `npm run package:webview` is an alias:
 
-- `dist/MediaDesk-0.1.0-win-x64.zip`
+- `dist/MediaDesk-0.1.1-win-x64.zip`
+- `dist/MediaDesk-0.1.1-win-x64.zip.sha256`
 
 The version in the filename comes from `package.json`. Archives are checked for integrity. Packaging uses an explicit file allowlist and excludes personal databases, model keys, diagnostic profiles, and PDB files.
 
-Fully extract the WebView2 ZIP before running `Start-MediaDesk.cmd` or `MediaDesk.exe`. The startup script runs the host through system dotnet. The host prefers a working Node.js 22+ installation on `PATH`, then tries the bundled runtime; `APM_WEBVIEW_NODE` can specify an absolute runtime path.
+Fully extract the WebView2 ZIP, then double-click `MediaDesk.exe`. Release packages exclude CMD / PS1 launchers, and login startup also uses the EXE directly. Other bundled files remain required. The host prefers a working Node.js 22+ installation on `PATH`, then tries the bundled runtime; `APM_WEBVIEW_NODE` can specify an absolute runtime path.
 
 ## Data and model configuration
 
@@ -131,7 +188,7 @@ Bug reports and suggestions are welcome through GitHub Issues. Include your Medi
 
 ## Compatibility
 
-- Version `0.1.0` supports Windows x64 and is under active development.
+- Version `0.1.1` supports Windows x64 and is under active development.
 - Media decoding and metadata writing depend on the file format, system codecs, and optional tools. Not all formats support the same metadata operations.
 - Photo semantic search requires a separately configured local model. Online AI features require a working model endpoint.
 - Release packages need only the runtime prerequisites. Building from source requires the development dependencies listed above.

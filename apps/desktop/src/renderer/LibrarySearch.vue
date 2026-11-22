@@ -2,7 +2,7 @@
 import OperationFeedback from './OperationFeedback.vue'
 import { ChevronDown, ChevronRight, FolderOpen, Plus, Search, Sparkles, X } from '@lucide/vue'
 import { computed, ref, shallowRef, watch, onMounted, onUnmounted } from 'vue'
-import { searchDirectoryPaths, searchFilterSchema, type SearchDirectoryItem, type SearchFilter, type SearchItem, type DirectoryIndexProgress } from '../shared/search'
+import { searchDirectoryPaths, searchFilterSchema, type AgentSearchResult, type SearchDirectoryItem, type SearchFilter, type SearchItem, type DirectoryIndexProgress } from '../shared/search'
 import { mediaLayouts, type MediaLayout } from './mediaLayouts'
 import SearchFileList from './SearchFileList.vue'
 import AgentSearchProgress from './AgentSearchProgress.vue'
@@ -86,7 +86,7 @@ const compactQuery = ref<HTMLInputElement>()
 const compactControls = ref<HTMLElement>()
 const intelligentMode = ref(false)
 const agentSteps = ref<string[]>([])
-const agentReasons = ref<Record<string, string>>({})
+const agentGroups = ref<NonNullable<AgentSearchResult['groups']>>([])
 let agentRequestId = ''
 const stopAgentSteps = api.onAgentSearchStep((id, step) => {
   if (id === agentRequestId && searching.value) agentSteps.value.push(step)
@@ -98,6 +98,9 @@ const expandedGroups = ref(new Set<string>())
 const folderContents = ref(new Map<string, { items: SearchItem[]; next: string | null; loading: boolean; error: string; loaded: boolean }>())
 const matchesMediaKind = (item: SearchItem) => !mediaKind.value || item.mediaKind === mediaKind.value
 const visibleFiles = computed(() => results.value.filter(matchesMediaKind))
+const visibleAgentGroups = computed(() => agentGroups.value.map(group => ({ ...group,
+  items: visibleFiles.value.filter(item => group.assetIds.includes(item.assetId))
+})).filter(group => group.items.length))
 const resultGroups = computed(() => groupSearchResults([], folderResults.value,
   [...folderContents.value.values()].flatMap((folder) => folder.items.filter(matchesMediaKind))))
 const hasResults = computed(() => visibleFiles.value.length > 0 || resultGroups.value.length > 0)
@@ -182,7 +185,7 @@ function readFilter(intelligent: boolean, keyword?: string) {
 function clearResults() {
   agentRequestId = ''
   agentSteps.value = []
-  agentReasons.value = {}
+  agentGroups.value = []
   results.value = []
   folderResults.value = []
   expandedGroups.value = new Set()
@@ -211,7 +214,10 @@ async function runSearch(filter: SearchFilter, intelligent = false) {
       if (version !== queryVersion) return
       if ('error' in reply) throw Error(reply.error.message)
       results.value = reply.result.items
-      agentReasons.value = Object.fromEntries((reply.result.reasons ?? []).map((item) => [item.assetId, item.reason]))
+      agentGroups.value = reply.result.groups?.length ? reply.result.groups : [{
+        kind: reply.result.warning ? 'unverified' : 'best', summary: reply.result.summary,
+        assetIds: reply.result.items.map(item => item.assetId)
+      }]
       unverifiedResults.value = Boolean(reply.result.warning)
       agentWarning.value = reply.result.warning ?? ''
     } else {
@@ -458,7 +464,17 @@ onUnmounted(() => {
         
         
         <AgentSearchProgress v-if="intelligentResults && searching" :key="agentRequestId" :steps="agentSteps" />
-        <SearchFileList v-if="visibleFiles.length" :items="visibleFiles" :layout="layout" :reasons="agentReasons" @reveal="reveal" />
+        <template v-if="intelligentResults && visibleFiles.length">
+          <section v-for="group in visibleAgentGroups" :key="group.kind" class="library-agent-group"
+            :aria-label="group.kind === 'best' ? '最匹配的素材' : group.kind === 'partial' ? '部分关键词匹配' : '待核对的候选'">
+            <div class="library-agent-group-heading">
+              <h3>{{ group.kind === 'best' ? '最匹配的素材' : group.kind === 'partial' ? '部分关键词匹配' : '待核对的候选' }} <small>{{ group.items.length }} 项</small></h3>
+              <p>{{ group.summary }}</p>
+            </div>
+            <SearchFileList :items="group.items" :layout="layout" @reveal="reveal" />
+          </section>
+        </template>
+        <SearchFileList v-else-if="visibleFiles.length" :items="visibleFiles" :layout="layout" @reveal="reveal" />
         <p v-else-if="mediaKind && (results.length || next) && !searching && !searchError" class="workspace-muted">
           已加载的结果中没有{{ mediaKind === 'photo' ? '照片' : '视频' }}。
         </p>

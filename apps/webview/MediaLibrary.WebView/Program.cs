@@ -48,7 +48,7 @@ internal sealed class Host : Form
     private readonly Process bridge;
     private NotifyIcon? tray;
     private bool exiting;
-    private string StartupCommand => $"\"{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe")}\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{Path.Combine(root, "Start-MediaDesk.ps1")}\"";
+    private string StartupCommand => $"\"{Path.Combine(root, "MediaDesk.exe")}\"";
     private CoreWebView2Environment? environment;
     private readonly System.Windows.Forms.Timer diagnostics = new() { Interval = 250 };
     public Host()

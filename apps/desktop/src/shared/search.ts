@@ -64,6 +64,10 @@ export const searchDetailsSchema = z.object({
 export const agentSearchSchema = z.object({
   items: z.array(searchItem), summary: z.string(), unresolvedConditions: z.array(z.string()),
   reasons: z.array(z.object({ assetId, reason: z.string() })).optional(),
+  groups: z.array(z.object({
+    kind: z.enum(['best', 'partial', 'unverified']),
+    summary: z.string(), assetIds: z.array(assetId)
+  })).optional(),
   steps: z.array(z.string()).optional(),
   warning: z.string().nullable()
 })

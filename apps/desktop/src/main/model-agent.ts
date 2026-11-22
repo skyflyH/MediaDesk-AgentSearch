@@ -102,7 +102,7 @@ const searchPrompt = `你是素材搜索 Agent，在用户选定的搜索目录�
 用户选择的目录和筛选条件由工具强制限定，不得扩大目录范围。先理解用户意图和概念之间的关系，再用真实本地结果逐步消歧，不能只做一次关键词抽取。
 遇到人名、别名、多义词时，先调用 search_assets，设置 searchStage:"explore"，只使用一个有辨识度的线索查名称、备注或目录；从结果理解其他概念，必要时反过来用另一个线索探索。例如“沙狮拍的车”，不能直接假定沙狮一定是作者属性，也不能把车只解释为汽车：先用 keywordGroups:[["沙狮"]] 查看真实名称备注，发现火车、汽车、摩托车等语境；也可先用“车”找出沙狮的相关记录。探索结果只是理解材料，不表示已满足全部条件。记录声称“沙狮拍摄”才支持拍摄者关系，名字出现本身不能证明作者。
 理解语境后必须再做 searchStage:"combined" 的组合查询，同时包含独立概念和用户硬条件，再选出最匹配结果。最多6次工具调用，每次最多20项，不遍历整库。结果有更多页时不能声称已穷尽全库。先探索再组合，避免把探索候选直接当完整匹配。
-若组合查询没有合适项，可以从真实探索结果推荐部分匹配；将这些ID也放入resultIds，并在partialMatches逐项提供assetId和missingConditions，明确缺少或无法确认哪些要求，理由标注“部分匹配推荐”。优先返回完整匹配，有完整匹配时不要混入弱相关项。用户明确的界面筛选范围和硬约束始终保留；未命中的条件不能说已满足，无相关线索则返回空列表。
+优先返回完整匹配，也可以补充少量具有明确关键词证据的部分匹配，界面会将其单独放在下方。将这些ID也放入resultIds，并在partialMatches逐项提供assetId和missingConditions，明确缺少或无法确认哪些要求。不能把部分匹配当作完整匹配，也不要推荐仅位于同一目录但没有相关关键词证据的素材。用户明确的界面筛选范围和硬约束始终保留；未命中的条件不能说已满足，无相关线索则返回空列表。
 理解自然语言中的概念、地点、用途与硬条件，不要只抽取原词。主题默认用 keywordGroups：外层概念之间是AND，每组内部原词、同义词、常见别称和强相关表达是OR。每组最多6词、最多6组，扩展必须紧密相关。例如“青岛海边日落”可用 [["青岛"],["海边","海岸","海滩","海景"],["日落","夕阳","晚霞","落日"]]。不得把青岛扩展成其他城市，也不能把日落扩展成日出。明确要求精确字词、编号、人名、必须包含时保留原词，使用 nameTerms、remarkTerms 或 keywordTerms，这些数组内部及之间均为AND。不要把同义词并列放进AND数组，也不要同时要求原词和同义词。
 主题搜索设置 includeDirectoryNames:true，每个概念可以命中文件名、备注、搜索根目录名称或其下子目录名称，概念可以分散在不同字段。只能使用工具返回的实际线索，不使用无关上级目录。目录是组织和主题线索，不能证明真实画面；理由明确标注目录线索、相关词和实际命中字段。用户明确要求仅文件名或备注时不能用目录代替。不能用无条件查询代替主题查询。
 组合查询应在同一次 search_assets 中传入所有独立概念和硬条件。类型、格式、作者、日期、大小和拍摄参数使用结构化字段，相关词扩展不能放宽硬条件。优先原词直接命中，其次同义词，最后目录或强相关线索；核对后返回实际候选，理由引用具体字段与命中词，无法验证的画面要求如实说明。
@@ -210,5 +210,20 @@ export async function runReadAgent(model: Parameters<typeof createAgent>[0]['mod
   const state = await agent.invoke({ messages: [{ role: 'user', content: query }] }, { signal, recursionLimit: 24 })
   const final = state.messages.at(-1)
   if (!AIMessage.isInstance(final) || final.tool_calls?.length) throw new ModelOutputError()
-  return parseSearchAnswer(final.text)
+  try {
+    return normalizeSearchAnswer(parseSearchAnswer(final.text))
+  } catch (error) {
+    if (!(error instanceof ModelOutputError || error instanceof z.ZodError)) throw error
+    // Some compatible models finish with prose despite the JSON instruction.
+    // Repair only the conclusion, using the same evidence and deadline. No tools
+    // are available here, so this cannot repeat searches or expand the scope.
+    signal.throwIfAborted()
+    const formatter = createAgent({ model, systemPrompt: searchPrompt, tools: [] })
+    const repaired = await formatter.invoke({ messages: [...state.messages, {
+      role: 'user', content: '上一次最终回答未通过格式校验。请仅依据本轮工具返回的真实素材及已有核对结论，重新输出规定的 JSON 对象。resultIds 必须是工具实际返回的 assetId 字符串数组，不得使用序号、文件名或编造 ID。无法确认的条件写入 unresolvedConditions，部分匹配填写 partialMatches。不要调用工具，不要增加新事实，不要输出解释或 Markdown。'
+    }] }, { signal, recursionLimit: 4 })
+    const answer = repaired.messages.at(-1)
+    if (!AIMessage.isInstance(answer) || answer.tool_calls?.length) throw new ModelOutputError()
+    return normalizeSearchAnswer(parseSearchAnswer(answer.text))
+  }
 }

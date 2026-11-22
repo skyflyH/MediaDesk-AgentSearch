@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { openAiTransport, probeModelConnection, parseSearchAnswer, normalizeSearchAnswer } from '../src/main/model-agent'
 import { defaultModelConfig } from '../src/shared/model'
+import { ModelFeatures } from '../src/main/model-features'
 
 const assetId = randomUUID()
 
@@ -12,6 +13,50 @@ it('accepts one JSON answer with surrounding prose and defaults optional narrati
   expect(() => parseSearchAnswer('{"resultIds":[]} {"resultIds":[]}')).toThrow()
   expect(() => normalizeSearchAnswer({ resultIds: ['invented'] })).toThrow()
   expect(() => parseSearchAnswer('{"resultIds":[')).toThrow()
+})
+
+it.each([false, true])('repairs an invalid final answer once without repeating local searches (still invalid: %s)', async (stillInvalid) => {
+  let requests = 0
+  let searches = 0
+  const server = createServer(async (request, response) => {
+    const payload = await body(request)
+    requests++
+    if (requests === 3) expect(payload.tools ?? []).toHaveLength(0)
+    const message = requests === 1 ? {
+      role: 'assistant', content: null, tool_calls: [{ id: 'call_search', type: 'function',
+        function: { name: 'search_assets', arguments: '{"keywordTerms":["青岛"]}' } }]
+    } : { role: 'assistant', content: requests === 2 || stillInvalid ? '已找到青岛的素材。'
+      : JSON.stringify({ resultIds: [assetId], summary: '找到青岛素材', unresolvedConditions: [] }) }
+    response.writeHead(200, { 'Content-Type': 'application/json' })
+    response.end(JSON.stringify({ id: 'chatcmpl-repair', object: 'chat.completion', created: 1760000000,
+      model: 'fixture-model', choices: [{ index: 0, message, finish_reason: requests === 1 ? 'tool_calls' : 'stop' }] }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const port = (server.address() as { port: number }).port
+    const model = openAiTransport({ ...defaultModelConfig, apiMode: 'completions', model: 'fixture-model',
+      baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: 'test-only' })
+    const tools = {
+      search: async () => { searches++; return { items: [{ assetId }] } },
+      details: async () => { throw Error('Unexpected details call') }
+    }
+    const result = model.search('找青岛素材', tools, AbortSignal.timeout(5000))
+    if (stillInvalid) await expect(result).rejects.toThrow()
+    else expect(await result).toMatchObject({ resultIds: [assetId] })
+    expect(searches).toBe(1)
+    expect(requests).toBe(3)
+    if (!stillInvalid) {
+      requests = 0
+      const item = { assetId, fileName: '青岛.mp4', matches: [], available: true }
+      const features = new ModelFeatures(() => ({ request: async () => ({ result: { items: [item], nextCursor: null } }) } as never),
+        () => ({ transport: model, scopes: defaultModelConfig.scopes }))
+      expect(await features.search('找青岛素材')).toMatchObject({ result: {
+        items: [{ assetId }], warning: null, summary: '找到青岛素材'
+      } })
+    }
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
 })
 type RequestBody = {
   tools?: Array<{ function?: { name: string }; name?: string }>
