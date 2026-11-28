@@ -35,7 +35,13 @@ export const ipcRenderer = {
       view.postMessage({ id, channel, args: wireArgs(args) })
     })
   },
-  send(channel: string, ...args: any[]) { view.postMessage({ channel, args: wireArgs(args) }) },
+  send(channel: string, ...args: any[]) {
+    // WinForms window bounds use physical pixels; DOM measurements use CSS pixels.
+    if (channel === 'search:quick-window-size' && typeof args[0] === 'number') {
+      args[0] = Math.ceil(args[0] * window.devicePixelRatio)
+    }
+    view.postMessage({ channel, args: wireArgs(args) })
+  },
   on(channel: string, listener: (...args: any[]) => void) {
     if (!listeners.has(channel)) listeners.set(channel, new Set())
     listeners.get(channel)!.add(listener)

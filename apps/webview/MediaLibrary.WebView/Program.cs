@@ -20,14 +20,18 @@ internal static class Program
     }
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, "Local\\MediaLibrary.WebView2", out var first);
-        if (!first) { NativeMethods.PostMessage((nint)NativeMethods.HWND_BROADCAST, NativeMethods.ShowMessage, 0, 0); return; }
+        if (!first) {
+            if (!args.Contains("--login-startup"))
+                NativeMethods.PostMessage((nint)NativeMethods.HWND_BROADCAST, NativeMethods.ShowMessage, 0, 0);
+            return;
+        }
         try {
             _ = CoreWebView2Environment.GetAvailableBrowserVersionString();
-            Application.Run(new Host());
+            Application.Run(new Host(args));
         } catch (WebView2RuntimeNotFoundException) {
             MessageBox.Show("请先安装 Microsoft Edge WebView2 Runtime，然后重新打开 MediaDesk。", "缺少运行环境", MessageBoxButtons.OK, MessageBoxIcon.Information);
         } catch (Exception error) {
@@ -48,10 +52,11 @@ internal sealed class Host : Form
     private readonly Process bridge;
     private NotifyIcon? tray;
     private bool exiting;
-    private string StartupCommand => $"\"{Path.Combine(root, "MediaDesk.exe")}\"";
+    private string LegacyStartupCommand => $"\"{Path.Combine(root, "MediaDesk.exe")}\"";
+    private string StartupCommand => LegacyStartupCommand + " --login-startup";
     private CoreWebView2Environment? environment;
     private readonly System.Windows.Forms.Timer diagnostics = new() { Interval = 250 };
-    public Host()
+    public Host(string[] args)
     {
         ShowInTaskbar = false; Opacity = 0; FormBorderStyle = FormBorderStyle.FixedToolWindow; Size = new Size(1, 1);
         Directory.CreateDirectory(profile);
@@ -61,6 +66,13 @@ internal sealed class Host : Form
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8, StandardInputEncoding = new UTF8Encoding(false) } };
         bridge.StartInfo.ArgumentList.Add(Path.Combine(root, "main", "index.cjs"));
+        if (args.Contains("--login-startup")) bridge.StartInfo.ArgumentList.Add("--login-startup");
+        // Upgrade this installation's command without enabling disabled startup items.
+        try {
+            using var startup = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+            if (startup?.GetValue("ai-photos-manager") as string == LegacyStartupCommand)
+                startup.SetValue("ai-photos-manager", StartupCommand);
+        } catch (Exception error) { Log("Updating login startup command failed: " + error.Message); }
         bridge.StartInfo.Environment["APM_WEBVIEW_ROOT"] = root.TrimEnd(Path.DirectorySeparatorChar);
         bridge.StartInfo.Environment["APM_WEBVIEW_PROFILE"] = profile;
         bridge.StartInfo.Environment["APM_WEBVIEW_SYNC"] = sync;

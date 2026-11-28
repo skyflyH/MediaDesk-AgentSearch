@@ -9,7 +9,7 @@ import * as channels from '../shared/channels'
 import { healthSchema, type Result } from '../shared/health'
 import { assetId, draftSchema, folderDetailsSchema, folderEntriesSchema, importSchema, revision, saveDraftSchema, savedSourcePropertiesSchema, workspaceSchema } from '../shared/workspace'
 import { EditShortcutSettings, HotkeySettings, normalizeHotkey } from './desktop-lifecycle'
-import { LoginStartup } from './login-startup'
+import { isLoginStartup, LoginStartup } from './login-startup'
 import { importAssetPaths } from './asset-import'
 import { openDirectoryInExplorer, openFolderInExplorer, openQueueItemInExplorer } from './open-folder'
 import { defaultEditShortcuts, defaultGlobalHotkeys, editShortcutsSchema, globalHotkeyTarget, viewActionSchema, type GlobalHotkeyTarget } from '../shared/desktop-controls'
@@ -112,7 +112,7 @@ function createWindow(): BrowserWindow {
     titleBarOverlay: { color: '#00000000', symbolColor: '#cccccc', height: 44 },
     title: 'MediaDesk',
     icon: appIcon,
-    show: !smokeProfile,
+    show: !smokeProfile && !isLoginStartup(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -235,7 +235,9 @@ function registerIpc(): void {
         typeof hasResults !== 'boolean') return
     const bounds = quickSearch.getBounds()
     const workArea = screen.getDisplayMatching(bounds).workArea
-    const height = Math.min(workArea.height, hasResults ? Math.max(530, controlsHeight) : controlsHeight)
+    const height = Math.min(workArea.height, hasResults
+      ? Math.max(Math.round(workArea.height * .7), controlsHeight + 240)
+      : Math.max(controlsHeight, Math.min(200, workArea.height)))
     const y = Math.max(workArea.y, Math.min(bounds.y, workArea.y + workArea.height - height))
     if (bounds.height !== height || bounds.y !== y) quickSearch.setBounds({ ...bounds, height, y })
   })
@@ -482,18 +484,22 @@ function showMainPage(): void {
 function showQuickSearch(): void {
   if (shuttingDown) return
   showQuickSearchOnLoad = true
+  const { x, y, width, height } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
+  const popupWidth = Math.min(1100, Math.round(width * .9))
+  const popupHeight = Math.round(height * .7)
   if (quickSearch && !quickSearch.isDestroyed()) {
+    const currentHeight = Math.min(quickSearch.getBounds().height, height)
+    quickSearch.setBounds({ x: x + Math.round((width - popupWidth) / 2),
+      y: y + Math.min(Math.round((height - popupHeight) * .28), height - currentHeight),
+      width: popupWidth, height: currentHeight })
     quickSearch.show()
     quickSearch.focus()
     return
   }
-  const { x, y, width, height } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea
-  const popupWidth = Math.min(760, width)
-  const popupHeight = Math.min(530, height)
   const popup = new BrowserWindow({
     title: 'MediaDesk · 快捷搜索',
     icon: appIcon,
-    width: popupWidth, height: Math.min(140, popupHeight),
+    width: popupWidth, height: Math.min(200, height),
     x: x + Math.round((width - popupWidth) / 2),
     y: y + Math.round((height - popupHeight) * .28),
     show: false, frame: false, resizable: false, skipTaskbar: true, alwaysOnTop: true,
@@ -585,7 +591,9 @@ async function quit(): Promise<void> {
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)
 } else {
-  app.on('second-instance', showWindow)
+  app.on('second-instance', (_event, args: string[] = []) => {
+    if (!isLoginStartup(args)) showWindow()
+  })
   app.on('window-all-closed', () => app.quit())
   app.on('before-quit', (event) => {
     event.preventDefault()

@@ -50,7 +50,7 @@ it('captures dragging, ignores other pointers, and resets pan and zoom between p
 it('keeps wheel zoom within limits and lets the view recover after reaching a limit', () => {
   const view = usePhotoTransform(() => true)
   view.setZoom(10000)
-  expect(view.zoom.value).toBe(400)
+  expect(view.zoom.value).toBe(1000)
   view.setZoom(-100)
   expect(view.zoom.value).toBe(50)
   view.setZoom(100)

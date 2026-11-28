@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { App } from 'electron'
-import { LoginStartup } from '../src/main/login-startup'
+import { isLoginStartup, LoginStartup } from '../src/main/login-startup'
 
 function setup(packaged = true) {
   let openAtLogin = false
@@ -16,14 +16,21 @@ function setup(packaged = true) {
 }
 
 describe('Windows login startup settings', () => {
+  it('recognizes only explicit login launches', () => {
+    expect(isLoginStartup(['MediaDesk.exe', '--login-startup'])).toBe(true)
+    expect(isLoginStartup(['node.exe', 'main/index.cjs', '--login-startup'])).toBe(true)
+    expect(isLoginStartup(['MediaDesk.exe'])).toBe(false)
+    expect(isLoginStartup(['MediaDesk.exe', '--login-startup-other'])).toBe(false)
+    expect(isLoginStartup([])).toBe(false)
+  })
   it('enables and removes the login item, using the same executable and arguments for read-back', () => {
     const { api, settings } = setup()
     expect(settings.get()).toBe(false)
     expect(settings.set(true)).toBe(true)
     expect(api.setLoginItemSettings).toHaveBeenLastCalledWith({
-      name: 'ai-photos-manager', path: 'C:\\Media Library\\app.exe', args: [], openAtLogin: true, enabled: true
+      name: 'ai-photos-manager', path: 'C:\\Media Library\\app.exe', args: ['--login-startup'], openAtLogin: true, enabled: true
     })
-    expect(api.getLoginItemSettings).toHaveBeenLastCalledWith({ path: 'C:\\Media Library\\app.exe', args: [] })
+    expect(api.getLoginItemSettings).toHaveBeenLastCalledWith({ path: 'C:\\Media Library\\app.exe', args: ['--login-startup'] })
     expect(settings.set(false)).toBe(false)
     expect(api.setLoginItemSettings).toHaveBeenLastCalledWith(expect.objectContaining({ openAtLogin: false, enabled: false }))
   })
@@ -45,8 +52,8 @@ describe('Windows login startup settings', () => {
   it('includes the quoted project path when launching a development build', () => {
     const { api, settings } = setup(false)
     settings.set(true)
-    expect(api.setLoginItemSettings).toHaveBeenLastCalledWith(expect.objectContaining({ args: ['"C:\\Media Library\\app"'] }))
-    expect(api.getLoginItemSettings).toHaveBeenLastCalledWith(expect.objectContaining({ args: ['"C:\\Media Library\\app"'] }))
+    expect(api.setLoginItemSettings).toHaveBeenLastCalledWith(expect.objectContaining({ args: ['"C:\\Media Library\\app"', '--login-startup'] }))
+    expect(api.getLoginItemSettings).toHaveBeenLastCalledWith(expect.objectContaining({ args: ['"C:\\Media Library\\app"', '--login-startup'] }))
   })
 
   it('does not change login items on an unsupported operating system', () => {

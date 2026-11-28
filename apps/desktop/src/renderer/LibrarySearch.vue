@@ -351,7 +351,7 @@ function focusQuery() {
 
 function resizeCompactWindow() {
   if (props.compact && compactControls.value) {
-    const height = Math.ceil(compactControls.value.getBoundingClientRect().height)
+    const height = Math.ceil(Math.max(compactControls.value.getBoundingClientRect().height, compactControls.value.scrollHeight))
     if (height > 0) api.resizeQuickSearch(height, showCompactResults.value)
   }
 }

@@ -6,7 +6,7 @@ export function usePhotoTransform(enabled: () => boolean) {
   const dragging = ref(false)
   const minZoom = 50
   const fitZoom = 100
-  const maxZoom = 400
+  const maxZoom = 1000
   const zoomStep = 25
   let pointer: { id: number; x: number; y: number; target: HTMLElement } | undefined
   const imageStyle = computed(() => ({

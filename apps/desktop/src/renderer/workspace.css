@@ -885,8 +885,8 @@
 .quick-search-window { --gutter: .85rem; grid-template-rows: minmax(0, 1fr); }
 .quick-search-window .workspace-content { margin: 0; }
 .workspace-app .library-search-controls { display: contents; }
-.workspace-app .library-search-compact .library-workarea { grid-template-rows: auto minmax(0, 1fr); }
-.workspace-app .library-search-compact .library-search-controls { display: block; }
+.workspace-app .library-search-compact .library-workarea { grid-template-rows: minmax(0, auto) minmax(0, 1fr); }
+.workspace-app .library-search-compact .library-search-controls { display: block; min-height: 0; overflow-y: auto; }
 .workspace-app .library-search-compact .library-query-form { flex-wrap: wrap; align-items: center; }
 .workspace-app .library-search-compact .library-query-box { min-width: min(100%, 14rem); }
 .workspace-app .library-quick-status {
@@ -903,6 +903,11 @@
 .workspace-app .library-search-compact :is(.library-directories, .library-results) { padding-block: .65rem; }
 .workspace-app .library-search-compact .library-directories ul { margin: 0; max-height: 4.5rem; }
 .workspace-app .library-search-compact .library-directories p { margin: 0; }
+.workspace-app .library-search-compact .library-results-list > .library-result {
+  grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+  padding: .6rem;
+}
+.workspace-app .library-search-compact .library-result-metadata { font-size: .95rem; }
 .workspace-app .library-compact-feedback { margin: .25rem var(--gutter) .65rem; overflow-wrap: anywhere; }
 .workspace-app .library-directory-list { display: flex; align-items: flex-start; gap: .3rem; }
 .workspace-app .library-directories .library-directory-list ul { margin: 0; min-width: 0; }

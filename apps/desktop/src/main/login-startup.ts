@@ -1,5 +1,11 @@
 import type { App } from 'electron'
 
+export const loginStartupArgument = '--login-startup'
+
+export function isLoginStartup(args: readonly string[] = process.argv): boolean {
+  return args.includes(loginStartupArgument)
+}
+
 type LoginApp = Pick<App, 'getLoginItemSettings' | 'setLoginItemSettings' | 'getAppPath' | 'isPackaged'>
 
 export class LoginStartup {
@@ -7,7 +13,7 @@ export class LoginStartup {
     private readonly platform = process.platform) {}
 
   private options() {
-    return { path: this.executable, args: this.app.isPackaged ? [] : [`"${this.app.getAppPath()}"`] }
+    return { path: this.executable, args: [...(this.app.isPackaged ? [] : [`"${this.app.getAppPath()}"`]), loginStartupArgument] }
   }
 
   get(): boolean {
